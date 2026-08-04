@@ -1,0 +1,991 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<form version="1.1" theme="light">
+  <label>CAO &amp; DAR — Focused Incident Investigation Console v8.1</label>
+  <description>Rebuilt from the stable v6.6 dashboard for fast, guided L2/L3 troubleshooting. The console runs only the searches needed for the selected investigation view and keeps REST API, workload, evidence, context and trends separate to reduce clutter and search load.</description>
+  <init>
+    <set token="selected_index">odin</set>
+    <set token="selected_project_label">ODIN</set>
+    <set token="project_namespace">odin-prod</set>
+    <set token="platform_type">OCP</set>
+    <set token="selected_sourcetype">*</set>
+    <set token="investigation_view">overview</set>
+    <set token="investigation_view_label">Incident Overview</set>
+    <set token="show_overview">true</set>
+    <set token="need_summary">true</set>
+    <set token="need_errors">true</set>
+    <set token="pod_filter">*</set>
+    <set token="endpoint_filter">*</set>
+    <set token="api_status">*</set>
+    <set token="text_filter">*</set>
+    <set token="selected_incident_label">No event selected — click an evidence row to open ±5-minute context</set>
+    <set token="incident_epoch">0</set>
+    <set token="context_pod">*</set>
+  </init>
+  <fieldset submitButton="true" autoRun="true">
+    <input type="dropdown" token="application_selection" searchWhenChanged="false"><label>Application / Runtime</label><choice value="lscpm-prod">LSCPM — lscpm-prod</choice>
+      <choice value="ltml-prod">LTML — ltml-prod</choice>
+      <choice value="ltsl-prod">LTSL — ltsl-prod</choice>
+      <choice value="l0fw-prod">L0FW — l0fw-prod</choice>
+      <choice value="canvas-prod">CANVAS — canvas-prod</choice>
+      <choice value="cpgi-prod">CPGI — cpgi-prod</choice>
+      <choice value="cpgiv-prod">CPGIV — cpgiv-prod</choice>
+      <choice value="cpgwst-prod">CPGWST — cpgwst-prod</choice>
+      <choice value="egscm-prod">EGSCM — egscm-prod</choice>
+      <choice value="egsop-prod">EGSOP — egsop-prod</choice>
+      <choice value="igfxi-prod">IGFXI — igfxi-prod</choice>
+      <choice value="invtr-prod">INVTR — invtr-prod</choice>
+      <choice value="odin-prod">ODIN — odin-prod</choice>
+      <choice value="pcap-prod">PCAP — pcap-prod</choice>
+      <choice value="pcmp-prod">PCMP — pcmp-prod</choice>
+      <choice value="prpx-prod">PRPX — prpx-prod</choice>
+      <choice value="rcaa-prod">RCAA — rcaa-prod</choice>
+      <choice value="rmib-prod">RMIB — rmib-prod</choice>
+      <choice value="lenel-vm">LENEL OPENACCESS — Windows VM</choice>
+      <default>odin-prod</default><initialValue>odin-prod</initialValue><change><eval token="selected_index">if($value$="lenel-vm","lenel",replace($value$,"-prod$",""))</eval><eval token="selected_project_label">if($value$="lenel-vm","LENEL OPENACCESS",upper(replace($value$,"-prod$","")))</eval><eval token="project_namespace">if($value$="lenel-vm","*",$value$)</eval><eval token="platform_type">if($value$="lenel-vm","VM","OCP")</eval><eval token="selected_sourcetype">if($value$="lenel-vm","wf:lenel:openaccess:txt","*")</eval><set token="form.pod_filter">*</set><set token="pod_filter">*</set><set token="form.endpoint_filter">*</set><set token="endpoint_filter">*</set><set token="form.api_status">*</set><set token="api_status">*</set><set token="form.text_filter">*</set><set token="text_filter">*</set><unset token="context_requested"/><unset token="context_earliest"/><unset token="context_latest"/></change></input>
+    <input type="time" token="time">
+      <label>Time Range</label>
+      <default>
+        <earliest>-30m@m</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="datacenter" searchWhenChanged="false">
+      <label>Data Center</label>
+      <choice value="*">All Data Centers</choice>
+      <choice value="GAR">GAR</choice>
+      <choice value="MAN">MAN</choice>
+      <choice value="STR">STR</choice>
+      <choice value="LEW">LEW</choice>
+      <default>*</default>
+      <initialValue>*</initialValue>
+    </input>
+    <input type="dropdown" token="investigation_view" searchWhenChanged="true">
+      <label>Quick Navigation</label>
+      <choice value="overview">1 — Incident Overview</choice>
+      <choice value="rest">2 — REST API Calls</choice>
+      <choice value="workload">3 — Workload / VM Host</choice>
+      <choice value="evidence">4 — Evidence &amp; Context</choice>
+      <choice value="trends">5 — Trends / Recurrence</choice>
+      <choice value="guide">6 — Troubleshooting Guide</choice>
+      <default>overview</default>
+      <initialValue>overview</initialValue>
+      <change>
+        <condition value="overview">
+          <set token="show_overview">true</set>
+          <unset token="show_rest"/>
+          <unset token="show_workload"/>
+          <unset token="show_evidence"/>
+          <unset token="show_trends"/>
+          <unset token="show_guide"/>
+          <set token="need_summary">true</set>
+          <set token="need_errors">true</set>
+          <set token="investigation_view_label">Incident Overview</set>
+          <unset token="context_requested"/>
+          <unset token="context_earliest"/>
+          <unset token="context_latest"/>
+        </condition>
+        <condition value="rest">
+          <unset token="show_overview"/>
+          <set token="show_rest">true</set>
+          <unset token="show_workload"/>
+          <unset token="show_evidence"/>
+          <unset token="show_trends"/>
+          <unset token="show_guide"/>
+          <unset token="need_summary"/>
+          <unset token="need_errors"/>
+          <set token="investigation_view_label">REST API Calls</set>
+          <unset token="context_requested"/>
+          <unset token="context_earliest"/>
+          <unset token="context_latest"/>
+        </condition>
+        <condition value="workload">
+          <unset token="show_overview"/>
+          <unset token="show_rest"/>
+          <set token="show_workload">true</set>
+          <unset token="show_evidence"/>
+          <unset token="show_trends"/>
+          <unset token="show_guide"/>
+          <set token="need_summary">true</set>
+          <set token="need_errors">true</set>
+          <set token="investigation_view_label">Workload / VM Host</set>
+          <unset token="context_requested"/>
+          <unset token="context_earliest"/>
+          <unset token="context_latest"/>
+        </condition>
+        <condition value="evidence">
+          <unset token="show_overview"/>
+          <unset token="show_rest"/>
+          <unset token="show_workload"/>
+          <set token="show_evidence">true</set>
+          <unset token="show_trends"/>
+          <unset token="show_guide"/>
+          <unset token="need_summary"/>
+          <set token="need_errors">true</set>
+          <set token="investigation_view_label">Evidence &amp; Context</set>
+          <unset token="context_requested"/>
+          <unset token="context_earliest"/>
+          <unset token="context_latest"/>
+        </condition>
+        <condition value="trends">
+          <unset token="show_overview"/>
+          <unset token="show_rest"/>
+          <unset token="show_workload"/>
+          <unset token="show_evidence"/>
+          <set token="show_trends">true</set>
+          <unset token="show_guide"/>
+          <set token="need_summary">true</set>
+          <set token="need_errors">true</set>
+          <set token="investigation_view_label">Trends / Recurrence</set>
+          <unset token="context_requested"/>
+          <unset token="context_earliest"/>
+          <unset token="context_latest"/>
+        </condition>
+        <condition value="guide">
+          <unset token="show_overview"/>
+          <unset token="show_rest"/>
+          <unset token="show_workload"/>
+          <unset token="show_evidence"/>
+          <unset token="show_trends"/>
+          <set token="show_guide">true</set>
+          <unset token="need_summary"/>
+          <unset token="need_errors"/>
+          <set token="investigation_view_label">Troubleshooting Guide</set>
+          <unset token="context_requested"/>
+          <unset token="context_earliest"/>
+          <unset token="context_latest"/>
+        </condition>
+      </change>
+    </input>
+    <input type="text" token="pod_filter" searchWhenChanged="false">
+      <label>Pod / VM Host (optional)</label>
+      <default>*</default>
+      <initialValue>*</initialValue>
+    </input>
+    <input type="text" token="endpoint_filter" searchWhenChanged="false">
+      <label>REST Endpoint (optional)</label>
+      <default>*</default>
+      <initialValue>*</initialValue>
+    </input>
+    <input type="dropdown" token="api_status" searchWhenChanged="false">
+      <label>HTTP Response</label>
+      <choice value="*">All Responses</choice>
+      <choice value="errors">Only 4xx / 5xx</choice>
+      <choice value="4xx">All 4xx</choice>
+      <choice value="5xx">All 5xx</choice>
+      <choice value="401">401</choice>
+      <choice value="403">403</choice>
+      <choice value="404">404</choice>
+      <choice value="429">429</choice>
+      <choice value="500">500</choice>
+      <choice value="502">502</choice>
+      <choice value="503">503</choice>
+      <choice value="504">504</choice>
+      <default>*</default>
+      <initialValue>*</initialValue>
+    </input>
+    <input type="text" token="text_filter" searchWhenChanged="false">
+      <label>Correlation ID / Error Text (optional)</label>
+      <default>*</default>
+      <initialValue>*</initialValue>
+    </input>
+  </fieldset>
+  <row id="console_header">
+    <panel>
+      <html>
+&lt;style&gt;
+  .fic-head{background:#f4f7fa;border:1px solid #cbd6e2;border-left:6px solid #005ea8;border-radius:5px;padding:12px 16px;margin-bottom:4px}
+  .fic-title{font-size:18px;font-weight:700;color:#1f2d3d;margin-bottom:5px}.fic-scope{color:#3c444d;line-height:1.55}
+  .fic-mode{display:inline-block;background:#005ea8;color:#fff;border-radius:12px;padding:3px 10px;font-weight:600}
+  .fic-help{background:#fff;border:1px solid #dfe6ec;border-radius:5px;padding:10px 14px;line-height:1.5}
+  .fic-help b{color:#005ea8}.fic-note{color:#5b6570;font-size:12px}
+  #overview_errors table,#rest_recent table,#workload_table table,#evidence_table table{table-layout:auto!important}
+  #overview_errors td:last-child,#rest_recent td:last-child,#evidence_table td:last-child{max-width:540px;white-space:normal!important}
+  #overview_errors .table-scroll-inner,#rest_recent .table-scroll-inner,#workload_table .table-scroll-inner,#evidence_table .table-scroll-inner{overflow-x:auto!important}
+&lt;/style&gt;
+&lt;div class="fic-head"&gt;
+  &lt;div class="fic-title"&gt;Focused Incident Investigation Console&lt;/div&gt;
+  &lt;div class="fic-scope"&gt;&lt;b&gt;Application:&lt;/b&gt; $selected_project_label$ &amp;nbsp;|&amp;nbsp; &lt;b&gt;Platform:&lt;/b&gt; $platform_type$ &amp;nbsp;|&amp;nbsp; &lt;b&gt;Project / Scope:&lt;/b&gt; $project_namespace$ &amp;nbsp;|&amp;nbsp; &lt;b&gt;Index:&lt;/b&gt; $selected_index$ &amp;nbsp;|&amp;nbsp; &lt;span class="fic-mode"&gt;$investigation_view_label$&lt;/span&gt;&lt;/div&gt;
+  &lt;div class="fic-note"&gt;Choose the investigation area, apply only the filters you need, then click Submit. Start with 30 minutes; expand the time range only after isolating the workload, endpoint or correlation ID.&lt;/div&gt;
+&lt;/div&gt;</html>
+    </panel>
+  </row>
+  <search depends="$need_summary$" id="base_summary">
+    <query>      index="$selected_index$" sourcetype="$selected_sourcetype$"
+      | fields _time _raw host hostname source sourcetype message body level severity severityText applicationName app namespace project pod_name container_name datacenter dc site status status_code statusCode http_status httpStatus respStatus responseStatus responseCode response_code kubernetes
+      | addinfo
+      | spath
+      | eval source_project=coalesce('kubernetes.namespace_name','kubernetes.namespace',namespace,project)
+      | where "$platform_type$"="VM" OR source_project="$project_namespace$"
+      | eval application=coalesce('message.applicationName',applicationName,app,'kubernetes.labels.app','kubernetes.labels.app_kubernetes_io/name','kubernetes.container_name','kubernetes.container',"$selected_project_label$")
+      | eval pod=coalesce('kubernetes.pod_name','kubernetes.pod',pod_name,hostname,host,"Unknown")
+      | eval container=coalesce('kubernetes.container_name','kubernetes.container',container_name,"Unknown")
+      | eval node=coalesce('kubernetes.node_name','kubernetes.host',host,hostname,"Unknown")
+      | eval raw_dc=upper(coalesce(datacenter,dc,site,'kubernetes.labels.datacenter','kubernetes.labels.dc',node,pod,host,hostname))
+      | eval datacenter=case(match(raw_dc,"GAR04P|(^|[-_])GAR([-_]|$)"),"GAR",match(raw_dc,"MAN04P|(^|[-_])MAN([-_]|$)"),"MAN",match(raw_dc,"STR04P|(^|[-_])STR([-_]|$)"),"STR",match(raw_dc,"LEW04P|(^|[-_])LEW([-_]|$)"),"LEW",true(),"UNKNOWN")
+      | eval log_level=upper(coalesce('message.level',level,severity,severityText,"UNKNOWN"))
+      | eval log_level=case(match(log_level,"ERR|FATAL|SEVERE"),"ERROR",match(log_level,"WARN"),"WARN",match(log_level,"INFO"),"INFO",match(log_level,"DEBUG|TRACE"),"DEBUG",true(),log_level)
+      | eval log_text=coalesce('message.body',body,message,_raw)
+      | eval status_candidate=coalesce('message.http_status','message.httpStatus','message.status','message.status_code','message.statusCode','message.respStatus','message.responseStatus','message.responseCode','message.response_code',http_status,httpStatus,status,status_code,statusCode,respStatus,responseStatus,responseCode,response_code)
+      | rex field=status_candidate max_match=1 "(?&lt;status_from_structured&gt;[1-5][0-9]{2})"
+      | rex field=log_text max_match=1 "(?i)(?:resp(?:onse)?[_ -]?status|http[_ -]?status|status(?:Code)?|response(?:Code)?|httpStatus|HTTP(?:/[0-9.]+)?)[^0-9]{0,40}(?&lt;status_from_text&gt;[1-5][0-9]{2})"
+      | rex field=log_text max_match=1 "(?i)(?:HttpClientErrorException|HttpServerErrorException|WebClientResponseException|unauthorized|forbidden|bad request|not found|too many requests|internal server error|bad gateway|service unavailable|gateway timeout)[^0-9]{0,80}(?&lt;status_from_exception&gt;400|401|403|404|405|408|409|415|422|429|500|501|502|503|504)"
+      | rex field=log_text max_match=1 "(?i)\b(?&lt;status_before_label&gt;400|401|403|404|405|408|409|415|422|429|500|501|502|503|504)\b[^A-Za-z]{0,20}(?:bad request|unauthorized|forbidden|not found|method not allowed|request timeout|conflict|unsupported media type|unprocessable entity|too many requests|internal server error|not implemented|bad gateway|service unavailable|gateway timeout)"
+      | eval http_status=tostring(coalesce(status_from_structured,status_from_text,status_from_exception,status_before_label))
+      | eval http_status=if(match(http_status,"^[1-5][0-9]{2}$"),http_status,null())
+      | eval is_http_event=if(isnotnull(http_status),1,0)
+      | eval is_http_200=if(http_status="200",1,0)
+      | eval is_http_success=if(tonumber(http_status)&gt;=200 AND tonumber(http_status)&lt;300,1,0)
+      | eval is_http_4xx=if(tonumber(http_status)&gt;=400 AND tonumber(http_status)&lt;500,1,0)
+      | eval is_http_5xx=if(tonumber(http_status)&gt;=500 AND tonumber(http_status)&lt;600,1,0)
+      | eval is_rest_api_error=if(match(log_text,"(?i)REST_API_CALL_ERROR|HttpServerErrorException|HttpClientErrorException|WebClientResponseException") OR is_http_4xx=1 OR is_http_5xx=1,1,0)
+      | eval is_database_error=if(match(log_text,"(?i)SQLServerException|SQLException|deadlock|JDBC|connection pool exhausted|database connection"),1,0)
+      | eval is_batch_error=if(match(log_text,"(?i)afterJob|beforeJob|JobExecution|StepExecution|status=FAILED|exitStatus=FAILED") AND match(log_text,"(?i)FAILED|Exception encountered|rollback"),1,0)
+      | eval is_rollback_error=if(match(log_text,"(?i)rollback|TransactionRollbackException|UnexpectedRollbackException"),1,0)
+      | eval is_timeout=if(match(log_text,"(?i)timeout|timed out|SocketTimeout|ReadTimeout|ConnectTimeout"),1,0)
+      | eval is_auth_error=if(http_status="401" OR http_status="403" OR match(log_text,"(?i)authentication failed|authorization failed|unauthorized|forbidden|invalid token|expired token"),1,0)
+      | eval is_platform_error=if(match(log_text,"(?i)OOMKilled|OutOfMemoryError|out of memory|CrashLoopBackOff|ImagePullBackOff|ErrImagePull|Evicted"),1,0)
+      | eval is_connection_error=if(match(log_text,"(?i)connection refused|connection reset|no route to host|broken pipe|Service Unavailable"),1,0)
+      | eval is_actionable_error=if(is_rest_api_error=1 OR is_database_error=1 OR is_batch_error=1 OR is_rollback_error=1 OR is_timeout=1 OR is_auth_error=1 OR is_platform_error=1 OR is_connection_error=1 OR log_level="ERROR",1,0)
+      | eval event_category=case(is_platform_error=1,"Pod / Platform Error",is_rollback_error=1,"Transaction Rollback",is_batch_error=1,"Batch Failure",is_database_error=1,"Database Error",is_timeout=1,"Timeout",is_auth_error=1,"Authentication Error",is_connection_error=1,"Connection Error",is_rest_api_error=1,"REST API Error",log_level="ERROR","Application Error",true(),"Normal")
+      | eval status_family=case(is_http_success=1,"2xx",tonumber(http_status)&gt;=300 AND tonumber(http_status)&lt;400,"3xx",is_http_4xx=1,"4xx",is_http_5xx=1,"5xx",true(),"No Status")
+      | eval text_filter_value=lower($text_filter|s$), pod_filter_value=lower($pod_filter|s$)
+      | where ($datacenter|s$="*" OR datacenter=$datacenter|s$)
+          AND (pod_filter_value="*" OR pod_filter_value="" OR like(lower(pod),"%".pod_filter_value."%"))
+          AND (text_filter_value="*" OR text_filter_value="" OR like(lower(application),"%".text_filter_value."%") OR like(lower(pod),"%".text_filter_value."%") OR like(lower(log_text),"%".text_filter_value."%"))
+      | eval http_status=coalesce(http_status,"N/A"), event_time=_time
+      | bin _time span=1m
+      | stats count AS Events
+          sum(is_actionable_error) AS Error_Events
+          sum(is_http_event) AS HTTP_Events
+          sum(is_http_200) AS HTTP_200
+          sum(is_http_success) AS HTTP_Success
+          sum(is_http_4xx) AS HTTP_4xx
+          sum(is_http_5xx) AS HTTP_5xx
+          sum(is_rest_api_error) AS REST_Errors
+          sum(is_database_error) AS DB_Errors
+          sum(is_batch_error) AS Batch_Errors
+          sum(is_rollback_error) AS Rollback_Errors
+          sum(is_timeout) AS Timeout_Errors
+          sum(is_auth_error) AS Auth_Errors
+          sum(is_platform_error) AS Platform_Errors
+          sum(is_connection_error) AS Connection_Errors
+          latest(event_time) AS Last_Seen
+          max(info_max_time) AS Search_End
+          by _time datacenter application pod http_status status_family event_category
+      | eval Search_End=if(Search_End&gt;now(),now(),Search_End), HTTP_Failures=HTTP_Events-HTTP_Success
+    </query>
+    <earliest>$time.earliest$</earliest>
+    <latest>$time.latest$</latest>
+  </search>
+  <search depends="$need_errors$" id="base_error_events">
+    <query>      index="$selected_index$" sourcetype="$selected_sourcetype$" (ERROR OR FATAL OR SEVERE OR Exception OR FAILED OR failure OR unauthorized OR forbidden OR rollback OR timeout OR "out of memory" OR OOMKilled OR CrashLoopBackOff OR SQLServerException OR SQLException OR "connection refused" OR "connection reset" OR "service unavailable" OR "400" OR "401" OR "403" OR "404" OR "405" OR "408" OR "409" OR "415" OR "422" OR "429" OR "500" OR "501" OR "502" OR "503" OR "504")
+      | head 4000
+      | fields _time _raw host hostname source sourcetype message body level severity severityText applicationName app namespace project pod_name container_name datacenter dc site URL url uri request_uri endpoint requestUrl requestURL method HttpMethod httpMethod requestMethod status status_code statusCode http_status httpStatus respStatus responseStatus responseCode response_code correlationId correlation_id traceId trace_id requestId request_id transactionId transaction_id kubernetes
+      | spath
+      | eval source_project=coalesce('kubernetes.namespace_name','kubernetes.namespace',namespace,project)
+      | where "$platform_type$"="VM" OR source_project="$project_namespace$"
+      | eval application=coalesce('message.applicationName',applicationName,app,'kubernetes.labels.app','kubernetes.labels.app_kubernetes_io/name','kubernetes.container_name','kubernetes.container',"$selected_project_label$")
+      | eval pod=coalesce('kubernetes.pod_name','kubernetes.pod',pod_name,hostname,host,"Unknown")
+      | eval container=coalesce('kubernetes.container_name','kubernetes.container',container_name,"Unknown")
+      | eval node=coalesce('kubernetes.node_name','kubernetes.host',host,hostname,"Unknown")
+      | eval raw_dc=upper(coalesce(datacenter,dc,site,'kubernetes.labels.datacenter','kubernetes.labels.dc',node,pod,host,hostname))
+      | eval datacenter=case(match(raw_dc,"GAR04P|(^|[-_])GAR([-_]|$)"),"GAR",match(raw_dc,"MAN04P|(^|[-_])MAN([-_]|$)"),"MAN",match(raw_dc,"STR04P|(^|[-_])STR([-_]|$)"),"STR",match(raw_dc,"LEW04P|(^|[-_])LEW([-_]|$)"),"LEW",true(),"UNKNOWN")
+      | eval log_level=upper(coalesce('message.level',level,severity,severityText,"UNKNOWN"))
+      | eval log_level=case(match(log_level,"ERR|FATAL|SEVERE"),"ERROR",match(log_level,"WARN"),"WARN",match(log_level,"INFO"),"INFO",match(log_level,"DEBUG|TRACE"),"DEBUG",true(),log_level)
+      | eval log_text=coalesce('message.body',body,message,_raw)
+      | eval correlation_id=coalesce('message.correlationId','message.correlation_id','message.traceId','message.trace_id','message.requestId','message.request_id','message.transactionId','message.transaction_id',correlationId,correlation_id,traceId,trace_id,requestId,request_id,transactionId,transaction_id)
+      | rex field=log_text max_match=1 "(?i)(?:correlation[_ -]?id|trace[_ -]?id|request[_ -]?id|transaction[_ -]?id)\s*[:=]\s*[\"']?(?&lt;correlation_from_text&gt;[A-Za-z0-9._:-]{6,128})"
+      | eval correlation_id=coalesce(correlation_id,correlation_from_text,"Not available")
+      | eval endpoint_candidate=coalesce('message.URL','message.url','message.uri','message.request_uri','message.endpoint','message.requestUrl','message.requestURL',URL,url,uri,request_uri,endpoint,requestUrl,requestURL)
+      | eval method_candidate=coalesce('message.HttpMethod','message.httpMethod','message.method','message.requestMethod',HttpMethod,httpMethod,method,requestMethod)
+      | eval status_candidate=coalesce('message.http_status','message.httpStatus','message.status','message.status_code','message.statusCode','message.respStatus','message.responseStatus','message.responseCode','message.response_code',http_status,httpStatus,status,status_code,statusCode,respStatus,responseStatus,responseCode,response_code)
+      | rex field=status_candidate max_match=1 "(?&lt;status_from_structured&gt;[1-5][0-9]{2})"
+      | rex field=log_text max_match=1 "(?i)(?:resp(?:onse)?[_ -]?status|http[_ -]?status|status(?:Code)?|response(?:Code)?|httpStatus|HTTP(?:/[0-9.]+)?)[^0-9]{0,40}(?&lt;status_from_text&gt;[1-5][0-9]{2})"
+      | rex field=log_text max_match=1 "(?i)(?:HttpClientErrorException|HttpServerErrorException|WebClientResponseException|unauthorized|forbidden|bad request|not found|too many requests|internal server error|bad gateway|service unavailable|gateway timeout)[^0-9]{0,80}(?&lt;status_from_exception&gt;400|401|403|404|405|408|409|415|422|429|500|501|502|503|504)"
+      | rex field=log_text max_match=1 "(?i)\b(?&lt;status_before_label&gt;400|401|403|404|405|408|409|415|422|429|500|501|502|503|504)\b[^A-Za-z]{0,20}(?:bad request|unauthorized|forbidden|not found|method not allowed|request timeout|conflict|unsupported media type|unprocessable entity|too many requests|internal server error|not implemented|bad gateway|service unavailable|gateway timeout)"
+      | rex field=log_text max_match=1 "(?i)\b(?&lt;method_from_text&gt;GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b(?:\s+request\s+(?:for|to)|\s+)?\s*[\"']?(?&lt;endpoint_from_text&gt;https?://[^\s\"']+|/[^\s\"']+)"
+      | eval endpoint=coalesce(endpoint_candidate,endpoint_from_text,"Not available"), http_method=upper(coalesce(method_candidate,method_from_text,"UNKNOWN")), http_status=tostring(coalesce(status_from_structured,status_from_text,status_from_exception,status_before_label,"N/A"))
+      | eval event_category=case(match(log_text,"(?i)OOMKilled|OutOfMemoryError|out of memory|CrashLoopBackOff|ImagePullBackOff|ErrImagePull|Evicted"),"Pod / Platform Error",match(log_text,"(?i)rollback|TransactionRollbackException|UnexpectedRollbackException"),"Transaction Rollback",match(log_text,"(?i)afterJob|beforeJob|JobExecution|StepExecution|status=FAILED|exitStatus=FAILED") AND match(log_text,"(?i)FAILED|Exception encountered|rollback"),"Batch Failure",match(log_text,"(?i)SQLServerException|SQLException|deadlock|JDBC|connection pool exhausted|database connection"),"Database Error",match(log_text,"(?i)timeout|timed out|SocketTimeout|ReadTimeout|ConnectTimeout"),"Timeout",http_status="401" OR http_status="403" OR match(log_text,"(?i)authentication failed|authorization failed|unauthorized|forbidden|invalid token|expired token"),"Authentication Error",match(log_text,"(?i)connection refused|connection reset|no route to host|broken pipe|Service Unavailable"),"Connection Error",tonumber(http_status)&gt;=400 OR match(log_text,"(?i)REST_API_CALL_ERROR|HttpServerErrorException|HttpClientErrorException|WebClientResponseException"),"REST API Error",log_level="ERROR","Application Error",log_level="WARN","Warning",true(),"Normal")
+      | eval log_text=replace(log_text,"(?i)Bearer\s+[A-Za-z0-9._~+/-]+=*","Bearer [REDACTED]")
+      | eval log_text=replace(log_text,"(?i)Basic\s+[A-Za-z0-9+/=]+","Basic [REDACTED]")
+      | eval log_text=replace(log_text,"(?i)(?:password|passwd|pwd|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]\s*[^\s,;\"']+","[SENSITIVE_FIELD_REDACTED]")
+      | eval text_filter_value=lower($text_filter|s$), pod_filter_value=lower($pod_filter|s$)
+      | where ($datacenter|s$="*" OR datacenter=$datacenter|s$)
+          AND (pod_filter_value="*" OR pod_filter_value="" OR like(lower(pod),"%".pod_filter_value."%"))
+          AND (text_filter_value="*" OR text_filter_value="" OR like(lower(application),"%".text_filter_value."%") OR like(lower(pod),"%".text_filter_value."%") OR like(lower(endpoint),"%".text_filter_value."%") OR like(lower(correlation_id),"%".text_filter_value."%") OR like(lower(log_text),"%".text_filter_value."%"))
+      | eval Priority=case(tonumber(http_status)&gt;=500 OR event_category="Pod / Platform Error","P1 - CRITICAL",http_status="401" OR http_status="403" OR http_status="429" OR event_category="Database Error" OR event_category="Connection Error" OR event_category="Timeout","P2 - HIGH",true(),"P3 - REVIEW")
+      | eval Likely_Owner=case(event_category="Pod / Platform Error","OCP / Platform",event_category="Database Error","Database / Application",event_category="Authentication Error","Authentication / Application",event_category="Connection Error" OR event_category="Timeout","Network / Downstream / Application",event_category="REST API Error","Application / Upstream",true(),"Application Support")
+      | eval Next_Check=case(http_status="401" OR http_status="403","Validate service account, token and authorization path",http_status="429","Check request volume and rate limit",tonumber(http_status)&gt;=500,"Check endpoint, affected workloads and downstream dependency",event_category="Pod / Platform Error","Check pod state, restart count and previous container logs",event_category="Database Error","Check DB connectivity, pool and recent DB events",event_category="Connection Error" OR event_category="Timeout","Check downstream reachability and response time",true(),"Correlate the event and review surrounding logs")
+      | eval Short_Message=replace(log_text,"[\r\n\t]+"," "), Short_Message=substr(Short_Message,1,360)
+      | eval Error_Signature=lower(Short_Message), Error_Signature=replace(Error_Signature,"[0-9a-f]{8}-[0-9a-f-]{27,}","&lt;id&gt;"), Error_Signature=replace(Error_Signature,"\b[0-9]{4,}\b","&lt;n&gt;"), Error_Signature=substr(Error_Signature,1,220)
+      | fields _time datacenter application pod container node log_level http_status event_category http_method endpoint correlation_id Priority Likely_Owner Next_Check Short_Message Error_Signature log_text source
+    </query>
+    <earliest>$time.earliest$</earliest>
+    <latest>$time.latest$</latest>
+  </search>
+  <search depends="$show_rest$" id="base_rest_events">
+    <query>      index="$selected_index$" sourcetype="$selected_sourcetype$" ("REST_API_CALL" OR "HttpClient" OR "HttpServer" OR "WebClient" OR "responseCode" OR "statusCode" OR "httpStatus" OR "requestUrl" OR "requestURI" OR " GET " OR " POST " OR " PUT " OR " PATCH " OR " DELETE ")
+      | head 12000
+      | fields _time _raw host hostname source sourcetype message body level severity severityText applicationName app namespace project pod_name container_name datacenter dc site URL url uri request_uri endpoint requestUrl requestURL method HttpMethod httpMethod requestMethod status status_code statusCode http_status httpStatus respStatus responseStatus responseCode response_code duration elapsed elapsed_ms responseTime response_time latency latency_ms kubernetes
+      | spath
+      | eval source_project=coalesce('kubernetes.namespace_name','kubernetes.namespace',namespace,project)
+      | where "$platform_type$"="VM" OR source_project="$project_namespace$"
+      | eval application=coalesce('message.applicationName',applicationName,app,'kubernetes.labels.app','kubernetes.labels.app_kubernetes_io/name','kubernetes.container_name','kubernetes.container',"$selected_project_label$")
+      | eval pod=coalesce('kubernetes.pod_name','kubernetes.pod',pod_name,hostname,host,"Unknown")
+      | eval container=coalesce('kubernetes.container_name','kubernetes.container',container_name,"Unknown")
+      | eval node=coalesce('kubernetes.node_name','kubernetes.host',host,hostname,"Unknown")
+      | eval raw_dc=upper(coalesce(datacenter,dc,site,'kubernetes.labels.datacenter','kubernetes.labels.dc',node,pod,host,hostname))
+      | eval datacenter=case(match(raw_dc,"GAR04P|(^|[-_])GAR([-_]|$)"),"GAR",match(raw_dc,"MAN04P|(^|[-_])MAN([-_]|$)"),"MAN",match(raw_dc,"STR04P|(^|[-_])STR([-_]|$)"),"STR",match(raw_dc,"LEW04P|(^|[-_])LEW([-_]|$)"),"LEW",true(),"UNKNOWN")
+      | eval log_text=coalesce('message.body',body,message,_raw)
+      | eval endpoint_candidate=coalesce('message.URL','message.url','message.uri','message.request_uri','message.endpoint','message.requestUrl','message.requestURL',URL,url,uri,request_uri,endpoint,requestUrl,requestURL)
+      | eval method_candidate=coalesce('message.HttpMethod','message.httpMethod','message.method','message.requestMethod',HttpMethod,httpMethod,method,requestMethod)
+      | eval status_candidate=coalesce('message.http_status','message.httpStatus','message.status','message.status_code','message.statusCode','message.respStatus','message.responseStatus','message.responseCode','message.response_code',http_status,httpStatus,status,status_code,statusCode,respStatus,responseStatus,responseCode,response_code)
+      | eval latency_candidate=coalesce('message.duration','message.elapsed','message.elapsed_ms','message.responseTime','message.response_time','message.latency','message.latency_ms',duration,elapsed,elapsed_ms,responseTime,response_time,latency,latency_ms)
+      | rex field=status_candidate max_match=1 "(?&lt;status_from_structured&gt;[1-5][0-9]{2})"
+      | rex field=log_text max_match=1 "(?i)(?:resp(?:onse)?[_ -]?status|http[_ -]?status|status(?:Code)?|response(?:Code)?|httpStatus|HTTP(?:/[0-9.]+)?)[^0-9]{0,40}(?&lt;status_from_text&gt;[1-5][0-9]{2})"
+      | rex field=log_text max_match=1 "(?i)\\b(?&lt;method_from_text&gt;GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\\b(?:\\s+request\\s+(?:for|to)|\\s+)?\\s*[\"']?(?&lt;endpoint_from_text&gt;https?://[^\\s\"']+|/[^\\s\"']+)"
+      | rex field=log_text max_match=1 "(?i)(?:duration|elapsed|response[_ -]?time|latency)[^0-9]{0,20}(?&lt;latency_from_text&gt;[0-9]+(?:\\.[0-9]+)?)\\s*(?&lt;latency_unit&gt;ms|milliseconds|s|seconds)?"
+      | eval endpoint=coalesce(endpoint_candidate,endpoint_from_text,"Not available"), http_method=upper(coalesce(method_candidate,method_from_text,"UNKNOWN")), http_status=tostring(coalesce(status_from_structured,status_from_text,"N/A"))
+      | eval latency_ms=tonumber(coalesce(latency_candidate,latency_from_text))
+      | eval latency_ms=if(lower(latency_unit)="s" OR lower(latency_unit)="seconds",latency_ms*1000,latency_ms)
+      | eval status_family=case(match(http_status,"^2"),"2xx",match(http_status,"^4"),"4xx",match(http_status,"^5"),"5xx",true(),"Other")
+      | eval is_failure=if(status_family="4xx" OR status_family="5xx",1,0)
+      | eval endpoint_filter_value=lower($endpoint_filter|s$)
+      | where ($datacenter|s$="*" OR datacenter=$datacenter|s$)
+          AND (endpoint_filter_value="*" OR endpoint_filter_value="" OR like(lower(endpoint),"%".endpoint_filter_value."%"))
+          AND ($api_status|s$="*" OR ($api_status|s$="errors" AND is_failure=1) OR status_family=$api_status|s$ OR http_status=$api_status|s$)
+      | eval correlation_id=coalesce('message.correlationId','message.correlation_id','message.traceId','message.trace_id','message.requestId','message.request_id','message.transactionId','message.transaction_id',correlationId,correlation_id,traceId,trace_id,requestId,request_id,transactionId,transaction_id,"Not available")
+      | rex field=log_text max_match=1 "(?i)(?:correlation[_ -]?id|trace[_ -]?id|request[_ -]?id|transaction[_ -]?id)\s*[:=]\s*[\"']?(?&lt;correlation_from_text&gt;[A-Za-z0-9._:-]{6,128})"
+      | eval correlation_id=coalesce(correlation_id,correlation_from_text,"Not available")
+      | eval text_filter_value=lower($text_filter|s$), pod_filter_value=lower($pod_filter|s$)
+      | where (pod_filter_value="*" OR pod_filter_value="" OR like(lower(pod),"%".pod_filter_value."%"))
+          AND (text_filter_value="*" OR text_filter_value="" OR like(lower(endpoint),"%".text_filter_value."%") OR like(lower(correlation_id),"%".text_filter_value."%") OR like(lower(log_text),"%".text_filter_value."%"))
+      | eval is_slow=if(isnotnull(latency_ms) AND latency_ms&gt;=3000,1,0)
+      | eval log_text=replace(log_text,"(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*","Bearer [REDACTED]")
+      | eval log_text=replace(log_text,"(?i)Basic\\s+[A-Za-z0-9+/=]+","Basic [REDACTED]")
+      | eval log_text=replace(log_text,"(?i)(?:password|passwd|pwd|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]\s*[^\s,;\"']+","[SENSITIVE_FIELD_REDACTED]")
+      | eval Short_Message=replace(log_text,"[\r\n\t]+"," "), Short_Message=substr(Short_Message,1,360)
+      | fields _time datacenter application pod container http_method endpoint http_status status_family is_failure is_slow latency_ms correlation_id Short_Message log_text source
+    </query>
+    <earliest>$time.earliest$</earliest>
+    <latest>$time.latest$</latest>
+  </search>
+  <row depends="$show_overview$" id="overview_help">
+    <panel>
+      <html>&lt;div class="fic-help"&gt;&lt;b&gt;60-second triage:&lt;/b&gt; confirm log freshness → review severity and affected workload count → open the newest actionable error → move to Evidence &amp;amp; Context only when deeper proof is required. This view intentionally avoids long workload-name lists.&lt;/div&gt;</html>
+    </panel>
+  </row>
+  <row depends="$show_overview$" id="overview_kpis">
+    <panel>
+      <single>
+        <title>Actionable Errors</title>
+        <search base="base_summary">
+          <query>| stats sum(Error_Events) AS value | eval value=coalesce(value,0)</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="height">95</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["#53A051","#F8BE34","#DC4E41"]</option>
+        <option name="rangeValues">[1,20]</option>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>HTTP 5xx</title>
+        <search base="base_summary">
+          <query>| stats sum(HTTP_5xx) AS value | eval value=coalesce(value,0)</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="height">95</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["#53A051","#F8BE34","#DC4E41"]</option>
+        <option name="rangeValues">[1,10]</option>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>HTTP 4xx</title>
+        <search base="base_summary">
+          <query>| stats sum(HTTP_4xx) AS value | eval value=coalesce(value,0)</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="height">95</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["#53A051","#F8BE34","#DC4E41"]</option>
+        <option name="rangeValues">[1,25]</option>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>Affected Workloads / Hosts</title>
+        <search base="base_summary">
+          <query>| where Error_Events&gt;0 | stats dc(pod) AS value | eval value=coalesce(value,0)</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="height">95</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["#53A051","#F8BE34","#DC4E41"]</option>
+        <option name="rangeValues">[1,10]</option>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>Minutes Since Last Log</title>
+        <search base="base_summary">
+          <query>| stats max(Last_Seen) AS Last_Seen max(Search_End) AS Search_End | eval value=round((Search_End-Last_Seen)/60,1) | fields value</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="height">95</option>
+        <option name="unit"> min</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["#53A051","#F8BE34","#DC4E41"]</option>
+        <option name="rangeValues">[5,15]</option>
+      </single>
+    </panel>
+  </row>
+  <row depends="$show_overview$" id="overview_status">
+    <panel>
+      <table id="overview_status_table">
+        <title>Current Situation — One-Line Operational Assessment</title>
+        <search base="base_summary">
+          <query>| stats sum(Error_Events) AS Errors sum(HTTP_4xx) AS HTTP_4xx sum(HTTP_5xx) AS HTTP_5xx sum(REST_Errors) AS REST_Errors sum(DB_Errors) AS DB_Errors sum(Connection_Errors) AS Connection_Errors sum(Timeout_Errors) AS Timeouts sum(Platform_Errors) AS Platform_Errors dc(pod) AS Reporting_Workloads max(Last_Seen) AS Last_Seen max(Search_End) AS Search_End
+| eval Minutes_Since_Last_Log=round((Search_End-Last_Seen)/60,1)
+| eval Status=case(Minutes_Since_Last_Log&gt;15,"NO FRESH LOGS",HTTP_5xx&gt;0 OR Platform_Errors&gt;0,"CRITICAL",Errors&gt;0,"DEGRADED",true(),"NO ACTIONABLE ERRORS")
+| eval Primary_Finding=case(Platform_Errors&gt;0,"Pod / platform failure evidence",HTTP_5xx&gt;0,"Server-side REST/API failures",DB_Errors&gt;0,"Database failures",Connection_Errors&gt;0 OR Timeouts&gt;0,"Connection or timeout failures",HTTP_4xx&gt;0,"Client/authentication REST failures",Errors&gt;0,"Application errors",true(),"No actionable errors in selected scope")
+| eval Recommended_Next_Step=case(Status="NO FRESH LOGS","Confirm Splunk ingestion and runtime state before declaring healthy",Platform_Errors&gt;0,"Open Workload / VM Host view",REST_Errors&gt;0 OR HTTP_4xx&gt;0 OR HTTP_5xx&gt;0,"Open REST API Calls view",Errors&gt;0,"Open Evidence &amp; Context view",true(),"No incident action required")
+| eval Last_Log=strftime(Last_Seen,"%Y-%m-%d %H:%M:%S")
+| table Status Primary_Finding Errors HTTP_4xx HTTP_5xx Reporting_Workloads Last_Log Minutes_Since_Last_Log Recommended_Next_Step</query>
+        </search>
+        <option name="count">10</option>
+        <option name="rowNumbers">true</option>
+        <option name="wrap">true</option>
+        <option name="drilldown">none</option>
+        <option name="link.visible">true</option>
+        <option name="link.exportResults.visible">true</option>
+        <option name="link.openSearch.visible">true</option>
+        <option name="link.inspectSearch.visible">true</option>
+        <format type="color" field="Status">
+          <colorPalette type="map">{"CRITICAL":"#DC4E41","DEGRADED":"#F8BE34","NO FRESH LOGS":"#F1813F","NO ACTIONABLE ERRORS":"#53A051"}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+  <row depends="$show_overview$" id="overview_errors_row">
+    <panel>
+      <table id="overview_errors">
+        <title>Newest Actionable Errors — Click a Row for Context</title>
+        <search base="base_error_events">
+          <query>| where (http_status!="200" AND http_status!="201" AND http_status!="N/A") OR (event_category!="Normal" AND event_category!="Warning")
+| eval Event_Time=strftime(_time,"%Y-%m-%d %H:%M:%S.%3N")
+| sort 0 - _time
+| head 25
+| table Event_Time Priority datacenter pod event_category http_status http_method endpoint correlation_id Likely_Owner Short_Message</query>
+        </search>
+        <option name="count">25</option>
+        <option name="rowNumbers">true</option>
+        <option name="wrap">true</option>
+        <option name="drilldown">row</option>
+        <option name="link.visible">true</option>
+        <option name="link.exportResults.visible">true</option>
+        <option name="link.openSearch.visible">true</option>
+        <option name="link.inspectSearch.visible">true</option>
+        <drilldown>
+          <set token="form.pod_filter">$row.pod$</set>
+          <set token="pod_filter">$row.pod$</set>
+          <set token="context_pod">$row.pod$</set>
+          <eval token="incident_epoch">strptime($row.Event_Time$,"%Y-%m-%d %H:%M:%S.%3N")</eval>
+          <eval token="context_earliest">strptime($row.Event_Time$,"%Y-%m-%d %H:%M:%S.%3N")-300</eval>
+          <eval token="context_latest">strptime($row.Event_Time$,"%Y-%m-%d %H:%M:%S.%3N")+300</eval>
+          <set token="selected_incident_label">$row.Priority$ — $row.pod$ — $row.event_category$ — HTTP $row.http_status$</set>
+          <set token="context_requested">1</set>
+          <set token="form.investigation_view">evidence</set>
+          <set token="investigation_view">evidence</set>
+          <set token="show_evidence">true</set>
+          <set token="need_errors">true</set>
+          <unset token="show_overview"/>
+          <unset token="show_rest"/>
+          <unset token="show_workload"/>
+          <unset token="show_trends"/>
+          <unset token="show_guide"/>
+          <unset token="need_summary"/>
+          <set token="investigation_view_label">Evidence &amp; Context</set>
+          <link>#context_log_window</link>
+        </drilldown>
+      </table>
+    </panel>
+  </row>
+  <row depends="$show_overview$" id="overview_categories">
+    <panel>
+      <table>
+        <title>Issue Breakdown — Compact Blast Radius</title>
+        <search base="base_summary">
+          <query>| where Error_Events&gt;0
+| stats sum(Error_Events) AS Events dc(pod) AS Affected_Workloads min(_time) AS First_Seen max(Last_Seen) AS Last_Seen by event_category
+| eval First_Seen=strftime(First_Seen,"%Y-%m-%d %H:%M:%S"), Last_Seen=strftime(Last_Seen,"%Y-%m-%d %H:%M:%S")
+| eval Likely_Owner=case(event_category="Pod / Platform Error","OCP / Platform",event_category="Database Error","Database / Application",event_category="Authentication Error","Authentication / Application",event_category="Connection Error" OR event_category="Timeout","Network / Downstream / Application",event_category="REST API Error","Application / Upstream",true(),"Application Support")
+| sort 0 - Events
+| table event_category Events Affected_Workloads First_Seen Last_Seen Likely_Owner</query>
+        </search>
+        <option name="count">12</option>
+        <option name="rowNumbers">true</option>
+        <option name="wrap">true</option>
+        <option name="drilldown">none</option>
+        <option name="link.visible">true</option>
+        <option name="link.exportResults.visible">true</option>
+        <option name="link.openSearch.visible">true</option>
+        <option name="link.inspectSearch.visible">true</option>
+      </table>
+    </panel>
+  </row>
+  <row depends="$show_rest$" id="rest_help">
+    <panel>
+      <html>&lt;div class="fic-help"&gt;&lt;b&gt;REST investigation:&lt;/b&gt; use Endpoint and HTTP Response filters only when needed. Endpoint counts are based on the newest bounded API events, which keeps this page responsive for longer time ranges. Click an API evidence row to open its surrounding logs.&lt;/div&gt;</html>
+    </panel>
+  </row>
+  <row depends="$show_rest$" id="rest_kpis">
+    <panel>
+      <single>
+        <title>Captured API Calls</title>
+        <search base="base_rest_events">
+          <query>| stats count AS value</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="height">95</option>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>API Failures</title>
+        <search base="base_rest_events">
+          <query>| stats sum(is_failure) AS value | eval value=coalesce(value,0)</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="height">95</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["#53A051","#F8BE34","#DC4E41"]</option>
+        <option name="rangeValues">[1,20]</option>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>API Success %</title>
+        <search base="base_rest_events">
+          <query>| stats count AS Calls sum(is_failure) AS Failures | eval value=if(Calls=0,0,round(((Calls-Failures)/Calls)*100,2)) | fields value</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="height">95</option>
+        <option name="unit">%</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["#DC4E41","#F8BE34","#53A051"]</option>
+        <option name="rangeValues">[95,99]</option>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>HTTP 5xx</title>
+        <search base="base_rest_events">
+          <query>| where status_family="5xx" | stats count AS value | eval value=coalesce(value,0)</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="height">95</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["#53A051","#F8BE34","#DC4E41"]</option>
+        <option name="rangeValues">[1,10]</option>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>Slow Calls ≥3s</title>
+        <search base="base_rest_events">
+          <query>| stats sum(is_slow) AS value | eval value=coalesce(value,0)</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="height">95</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["#53A051","#F8BE34","#DC4E41"]</option>
+        <option name="rangeValues">[1,20]</option>
+      </single>
+    </panel>
+  </row>
+  <row depends="$show_rest$" id="rest_endpoint_health">
+    <panel>
+      <table id="rest_endpoint_table">
+        <title>Endpoint Health — Click an Endpoint to Filter</title>
+        <search base="base_rest_events">
+          <query>| stats count AS Calls sum(is_failure) AS Failures sum(eval(if(status_family="4xx",1,0))) AS HTTP_4xx sum(eval(if(status_family="5xx",1,0))) AS HTTP_5xx avg(latency_ms) AS Avg_ms perc95(latency_ms) AS P95_ms dc(pod) AS Affected_Workloads max(_time) AS Last_Seen by http_method endpoint
+| eval Success_Pct=if(Calls=0,0,round(((Calls-Failures)/Calls)*100,2)), Avg_ms=round(Avg_ms,1), P95_ms=round(P95_ms,1), Last_Seen=strftime(Last_Seen,"%Y-%m-%d %H:%M:%S")
+| sort 0 - Failures - Calls
+| table http_method endpoint Calls Failures Success_Pct HTTP_4xx HTTP_5xx Avg_ms P95_ms Affected_Workloads Last_Seen</query>
+        </search>
+        <option name="count">30</option>
+        <option name="rowNumbers">true</option>
+        <option name="wrap">true</option>
+        <option name="drilldown">row</option>
+        <option name="link.visible">true</option>
+        <option name="link.exportResults.visible">true</option>
+        <option name="link.openSearch.visible">true</option>
+        <option name="link.inspectSearch.visible">true</option>
+        <drilldown>
+          <set token="form.endpoint_filter">$row.endpoint$</set>
+          <set token="endpoint_filter">$row.endpoint$</set>
+        </drilldown>
+      </table>
+    </panel>
+  </row>
+  <row depends="$show_rest$" id="rest_response_codes">
+    <panel>
+      <table>
+        <title>HTTP Response Summary — No Oversized Workload Lists</title>
+        <search base="base_rest_events">
+          <query>| where http_status!="N/A"
+| stats count AS Calls dc(endpoint) AS Endpoints dc(pod) AS Affected_Workloads min(_time) AS First_Seen max(_time) AS Last_Seen by http_status status_family
+| eval Description=case(http_status="200","OK",http_status="201","Created",http_status="400","Bad Request",http_status="401","Unauthorized",http_status="403","Forbidden",http_status="404","Not Found",http_status="409","Conflict",http_status="429","Rate Limited",http_status="500","Internal Server Error",http_status="502","Bad Gateway",http_status="503","Service Unavailable",http_status="504","Gateway Timeout",true(),"Other")
+| eval First_Seen=strftime(First_Seen,"%Y-%m-%d %H:%M:%S"), Last_Seen=strftime(Last_Seen,"%Y-%m-%d %H:%M:%S")
+| sort 0 http_status
+| table http_status Description Calls Endpoints Affected_Workloads First_Seen Last_Seen</query>
+        </search>
+        <option name="count">20</option>
+        <option name="rowNumbers">true</option>
+        <option name="wrap">true</option>
+        <option name="drilldown">none</option>
+        <option name="link.visible">true</option>
+        <option name="link.exportResults.visible">true</option>
+        <option name="link.openSearch.visible">true</option>
+        <option name="link.inspectSearch.visible">true</option>
+      </table>
+    </panel>
+  </row>
+  <row depends="$show_rest$" id="rest_charts">
+    <panel>
+      <chart>
+        <title>API Calls and Failures Over Time</title>
+        <search base="base_rest_events">
+          <query>| timechart span=5m count AS Calls sum(is_failure) AS Failures sum(is_slow) AS Slow_Calls</query>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="height">300</option>
+        <option name="drilldown">none</option>
+      </chart>
+    </panel>
+    <panel>
+      <chart>
+        <title>Failure Distribution by HTTP Code</title>
+        <search base="base_rest_events">
+          <query>| where is_failure=1 | stats count by http_status | sort 0 - count</query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="height">300</option>
+        <option name="drilldown">none</option>
+      </chart>
+    </panel>
+  </row>
+  <row depends="$show_rest$" id="rest_recent_row">
+    <panel>
+      <table id="rest_recent">
+        <title>Recent Failed or Slow API Calls — Click for Context</title>
+        <search base="base_rest_events">
+          <query>| where is_failure=1 OR is_slow=1
+| eval Event_Time=strftime(_time,"%Y-%m-%d %H:%M:%S.%3N"), Result=case(is_failure=1,"FAILED",is_slow=1,"SLOW",true(),"OK")
+| sort 0 - _time
+| head 50
+| table Event_Time Result datacenter pod container http_method endpoint http_status latency_ms correlation_id Short_Message</query>
+        </search>
+        <option name="count">50</option>
+        <option name="rowNumbers">true</option>
+        <option name="wrap">true</option>
+        <option name="drilldown">row</option>
+        <option name="link.visible">true</option>
+        <option name="link.exportResults.visible">true</option>
+        <option name="link.openSearch.visible">true</option>
+        <option name="link.inspectSearch.visible">true</option>
+        <drilldown>
+          <set token="form.pod_filter">$row.pod$</set>
+          <set token="pod_filter">$row.pod$</set>
+          <set token="context_pod">$row.pod$</set>
+          <eval token="incident_epoch">strptime($row.Event_Time$,"%Y-%m-%d %H:%M:%S.%3N")</eval>
+          <eval token="context_earliest">strptime($row.Event_Time$,"%Y-%m-%d %H:%M:%S.%3N")-300</eval>
+          <eval token="context_latest">strptime($row.Event_Time$,"%Y-%m-%d %H:%M:%S.%3N")+300</eval>
+          <set token="selected_incident_label">$row.Result$ REST call — $row.pod$ — $row.http_method$ $row.endpoint$ — HTTP $row.http_status$</set>
+          <set token="context_requested">1</set>
+          <set token="form.investigation_view">evidence</set>
+          <set token="investigation_view">evidence</set>
+          <set token="show_evidence">true</set>
+          <set token="need_errors">true</set>
+          <unset token="show_rest"/>
+          <set token="investigation_view_label">Evidence &amp; Context</set>
+          <link>#context_log_window</link>
+        </drilldown>
+      </table>
+    </panel>
+  </row>
+  <row depends="$show_workload$" id="workload_help">
+    <panel>
+      <html>&lt;div class="fic-help"&gt;&lt;b&gt;Workload / host investigation:&lt;/b&gt; this view shows one compact row per pod or VM host. It never prints hundreds of workload names into a single cell. Click a workload to narrow Evidence &amp;amp; Context.&lt;/div&gt;</html>
+    </panel>
+  </row>
+  <row depends="$show_workload$" id="workload_table_row">
+    <panel>
+      <table id="workload_table">
+        <title>Workload / VM Host Health — Click to Investigate</title>
+        <search base="base_summary">
+          <query>| stats sum(Events) AS Events sum(Error_Events) AS Errors sum(HTTP_4xx) AS HTTP_4xx sum(HTTP_5xx) AS HTTP_5xx sum(REST_Errors) AS REST_Errors sum(DB_Errors) AS DB_Errors sum(Connection_Errors) AS Connection_Errors sum(Timeout_Errors) AS Timeouts sum(Platform_Errors) AS Platform_Errors max(Last_Seen) AS Last_Seen max(Search_End) AS Search_End by datacenter application pod
+| eval Minutes_Since_Last_Log=round((Search_End-Last_Seen)/60,1)
+| eval Health=case(Minutes_Since_Last_Log&gt;15,"STALE",Platform_Errors&gt;0 OR HTTP_5xx&gt;0,"CRITICAL",Errors&gt;0,"DEGRADED",true(),"HEALTHY")
+| eval Last_Seen=strftime(Last_Seen,"%Y-%m-%d %H:%M:%S")
+| sort 0 - Errors - HTTP_5xx
+| table Health datacenter application pod Events Errors HTTP_4xx HTTP_5xx REST_Errors DB_Errors Connection_Errors Timeouts Platform_Errors Minutes_Since_Last_Log Last_Seen</query>
+        </search>
+        <option name="count">50</option>
+        <option name="rowNumbers">true</option>
+        <option name="wrap">true</option>
+        <option name="drilldown">row</option>
+        <option name="link.visible">true</option>
+        <option name="link.exportResults.visible">true</option>
+        <option name="link.openSearch.visible">true</option>
+        <option name="link.inspectSearch.visible">true</option>
+        <format type="color" field="Health">
+          <colorPalette type="map">{"CRITICAL":"#DC4E41","DEGRADED":"#F8BE34","STALE":"#F1813F","HEALTHY":"#53A051"}</colorPalette>
+        </format>
+        <drilldown>
+          <set token="form.pod_filter">$row.pod$</set>
+          <set token="pod_filter">$row.pod$</set>
+          <set token="form.investigation_view">evidence</set>
+          <set token="investigation_view">evidence</set>
+          <set token="show_evidence">true</set>
+          <set token="need_errors">true</set>
+          <unset token="show_workload"/>
+          <unset token="need_summary"/>
+          <set token="investigation_view_label">Evidence &amp; Context</set>
+          <link>#evidence_table</link>
+        </drilldown>
+      </table>
+    </panel>
+  </row>
+  <row depends="$show_workload$" id="workload_charts">
+    <panel>
+      <chart>
+        <title>Top Workloads by Error Count</title>
+        <search base="base_summary">
+          <query>| where Error_Events&gt;0 | stats sum(Error_Events) AS Errors by pod | sort 0 - Errors | head 12</query>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="height">300</option>
+        <option name="drilldown">none</option>
+      </chart>
+    </panel>
+    <panel>
+      <chart>
+        <title>Workload Error Trend</title>
+        <search base="base_summary">
+          <query>| where Error_Events&gt;0 | timechart span=15m sum(Error_Events) by pod limit=10 useother=f</query>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="height">300</option>
+        <option name="drilldown">none</option>
+      </chart>
+    </panel>
+  </row>
+  <row depends="$show_workload$" id="workload_evidence">
+    <panel>
+      <table>
+        <title>Latest Evidence for the Selected Workload Filter</title>
+        <search base="base_error_events">
+          <query>| where (http_status!="200" AND http_status!="201" AND http_status!="N/A") OR (event_category!="Normal" AND event_category!="Warning")
+| eval Event_Time=strftime(_time,"%Y-%m-%d %H:%M:%S")
+| sort 0 - _time | head 40
+| table Event_Time Priority datacenter pod event_category http_status endpoint correlation_id Short_Message</query>
+        </search>
+        <option name="count">40</option>
+        <option name="rowNumbers">true</option>
+        <option name="wrap">true</option>
+        <option name="drilldown">none</option>
+        <option name="link.visible">true</option>
+        <option name="link.exportResults.visible">true</option>
+        <option name="link.openSearch.visible">true</option>
+        <option name="link.inspectSearch.visible">true</option>
+      </table>
+    </panel>
+  </row>
+  <row depends="$show_evidence$" id="evidence_help">
+    <panel>
+      <html>&lt;div class="fic-help"&gt;&lt;b&gt;Evidence &amp;amp; Context:&lt;/b&gt; filter by a pod, correlation ID, endpoint or error text. The table is deliberately bounded and exportable. Click one row to open five minutes before and after the selected event.&lt;/div&gt;</html>
+    </panel>
+  </row>
+  <row depends="$show_evidence$" id="evidence_scope">
+    <panel>
+      <table>
+        <title>Evidence Scope Summary</title>
+        <search base="base_error_events">
+          <query>| where (http_status!="200" AND http_status!="201" AND http_status!="N/A") OR (event_category!="Normal" AND event_category!="Warning")
+| stats count AS Evidence_Events dc(pod) AS Workloads dc(correlation_id) AS Correlation_IDs values(event_category) AS Categories min(_time) AS First_Seen max(_time) AS Last_Seen
+| eval Categories=mvjoin(mvindex(Categories,0,5),", "), First_Seen=strftime(First_Seen,"%Y-%m-%d %H:%M:%S"), Last_Seen=strftime(Last_Seen,"%Y-%m-%d %H:%M:%S")
+| table Evidence_Events Workloads Correlation_IDs Categories First_Seen Last_Seen</query>
+        </search>
+        <option name="count">10</option>
+        <option name="rowNumbers">true</option>
+        <option name="wrap">true</option>
+        <option name="drilldown">none</option>
+        <option name="link.visible">true</option>
+        <option name="link.exportResults.visible">true</option>
+        <option name="link.openSearch.visible">true</option>
+        <option name="link.inspectSearch.visible">true</option>
+      </table>
+    </panel>
+  </row>
+  <row depends="$show_evidence$" id="evidence_table_row">
+    <panel>
+      <table id="evidence_table">
+        <title>Redacted Error Evidence — Click a Row for ±5-Minute Context</title>
+        <search base="base_error_events">
+          <query>| where (http_status!="200" AND http_status!="201" AND http_status!="N/A") OR (event_category!="Normal" AND event_category!="Warning")
+| eval Event_Time=strftime(_time,"%Y-%m-%d %H:%M:%S.%3N")
+| sort 0 - _time | head 100
+| table Event_Time Priority datacenter application pod container event_category http_status http_method endpoint correlation_id Likely_Owner Next_Check Short_Message source</query>
+        </search>
+        <option name="count">50</option>
+        <option name="rowNumbers">true</option>
+        <option name="wrap">true</option>
+        <option name="drilldown">row</option>
+        <option name="link.visible">true</option>
+        <option name="link.exportResults.visible">true</option>
+        <option name="link.openSearch.visible">true</option>
+        <option name="link.inspectSearch.visible">true</option>
+        <drilldown>
+          <set token="context_pod">$row.pod$</set>
+          <set token="form.pod_filter">$row.pod$</set>
+          <set token="pod_filter">$row.pod$</set>
+          <eval token="incident_epoch">strptime($row.Event_Time$,"%Y-%m-%d %H:%M:%S.%3N")</eval>
+          <eval token="context_earliest">strptime($row.Event_Time$,"%Y-%m-%d %H:%M:%S.%3N")-300</eval>
+          <eval token="context_latest">strptime($row.Event_Time$,"%Y-%m-%d %H:%M:%S.%3N")+300</eval>
+          <set token="context_requested">1</set>
+          <set token="selected_incident_label">$row.Priority$ — $row.application$ / $row.pod$ — $row.event_category$ — HTTP $row.http_status$</set>
+          <link>#context_log_window</link>
+        </drilldown>
+      </table>
+    </panel>
+  </row>
+  <row depends="$context_requested$" id="context_row">
+    <panel>
+      <table id="context_log_window">
+        <title>$selected_incident_label$ — Five Minutes Before and After</title>
+        <search>
+          <query>index="$selected_index$" sourcetype="$selected_sourcetype$"
+| head 20000
+| fields _time _raw host hostname source message body level severity severityText applicationName app namespace project pod_name container_name datacenter dc site URL url uri request_uri endpoint requestUrl requestURL method HttpMethod httpMethod requestMethod status status_code statusCode http_status httpStatus respStatus responseStatus responseCode response_code correlationId correlation_id traceId trace_id requestId request_id transactionId transaction_id kubernetes
+| spath
+| eval source_project=coalesce('kubernetes.namespace_name','kubernetes.namespace',namespace,project)
+| where "$platform_type$"="VM" OR source_project="$project_namespace$"
+| eval application=coalesce('message.applicationName',applicationName,app,'kubernetes.labels.app','kubernetes.labels.app_kubernetes_io/name','kubernetes.container_name','kubernetes.container',"$selected_project_label$")
+| eval pod=coalesce('kubernetes.pod_name','kubernetes.pod',pod_name,hostname,host,"Unknown"), container=coalesce('kubernetes.container_name','kubernetes.container',container_name,"Unknown"), node=coalesce('kubernetes.node_name','kubernetes.host',host,hostname,"Unknown")
+| where pod="$context_pod$"
+| eval raw_dc=upper(coalesce(datacenter,dc,site,'kubernetes.labels.datacenter','kubernetes.labels.dc',node,pod,host,hostname)), datacenter=case(match(raw_dc,"GAR04P|(^|[-_])GAR([-_]|$)"),"GAR",match(raw_dc,"MAN04P|(^|[-_])MAN([-_]|$)"),"MAN",match(raw_dc,"STR04P|(^|[-_])STR([-_]|$)"),"STR",match(raw_dc,"LEW04P|(^|[-_])LEW([-_]|$)"),"LEW",true(),"UNKNOWN")
+| where "$datacenter$"="*" OR datacenter="$datacenter$"
+| eval log_level=upper(coalesce('message.level',level,severity,severityText,"UNKNOWN")), log_level=case(match(log_level,"ERR|FATAL|SEVERE"),"ERROR",match(log_level,"WARN"),"WARN",match(log_level,"INFO"),"INFO",match(log_level,"DEBUG|TRACE"),"DEBUG",true(),log_level), log_text=coalesce('message.body',body,message,_raw)
+| eval endpoint_candidate=coalesce('message.URL','message.url','message.uri','message.request_uri','message.endpoint','message.requestUrl','message.requestURL',URL,url,uri,request_uri,endpoint,requestUrl,requestURL), method_candidate=coalesce('message.HttpMethod','message.httpMethod','message.method','message.requestMethod',HttpMethod,httpMethod,method,requestMethod)
+| eval status_candidate=coalesce('message.http_status','message.httpStatus','message.status','message.status_code','message.statusCode','message.respStatus','message.responseStatus','message.responseCode','message.response_code',http_status,httpStatus,status,status_code,statusCode,respStatus,responseStatus,responseCode,response_code)
+| rex field=status_candidate max_match=1 "(?&lt;status_from_structured&gt;[1-5][0-9]{2})"
+| rex field=log_text max_match=1 "(?i)(?:resp(?:onse)?[_ -]?status|http[_ -]?status|status(?:Code)?|response(?:Code)?|httpStatus|HTTP(?:/[0-9.]+)?)[^0-9]{0,40}(?&lt;status_from_text&gt;[1-5][0-9]{2})"
+| rex field=log_text max_match=1 "(?i)\b(?&lt;method_from_text&gt;GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b(?:\s+request\s+(?:for|to)|\s+)?\s*["']?(?&lt;endpoint_from_text&gt;https?://[^\s"']+|/[^\s"']+)"
+| eval http_status=coalesce(status_from_structured,status_from_text,"N/A"), endpoint=coalesce(endpoint_candidate,endpoint_from_text,"Not available"), http_method=upper(coalesce(method_candidate,method_from_text,"UNKNOWN"))
+| eval correlation_id=coalesce('message.correlationId','message.correlation_id','message.traceId','message.trace_id','message.requestId','message.request_id','message.transactionId','message.transaction_id',correlationId,correlation_id,traceId,trace_id,requestId,request_id,transactionId,transaction_id,"Not available")
+| eval log_text=replace(log_text,"(?i)Bearer\s+[A-Za-z0-9._~+/-]+=*","Bearer [REDACTED]"), log_text=replace(log_text,"(?i)Basic\s+[A-Za-z0-9+/=]+","Basic [REDACTED]"), log_text=replace(log_text,"(?i)(?:password|passwd|pwd|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]\s*[^\s,;"']+","[SENSITIVE_FIELD_REDACTED]")
+| eval Seconds_From_Selected=round(_time-$incident_epoch$,0), Context=case(abs(Seconds_From_Selected)&lt;=1,"SELECTED",Seconds_From_Selected&lt;0,"BEFORE",true(),"AFTER"), Event_Time=strftime(_time,"%Y-%m-%d %H:%M:%S.%3N"), Short_Message=substr(replace(log_text,"[\r\n\t]+"," "),1,600)
+| sort 0 _time
+| table Context Seconds_From_Selected Event_Time datacenter pod container log_level http_status http_method endpoint correlation_id Short_Message source</query>
+          <earliest>$context_earliest$</earliest>
+          <latest>$context_latest$</latest>
+        </search>
+        <option name="count">50</option>
+        <option name="rowNumbers">true</option>
+        <option name="wrap">true</option>
+        <option name="link.visible">true</option>
+        <option name="link.exportResults.visible">true</option>
+        <option name="link.openSearch.visible">true</option>
+        <option name="link.inspectSearch.visible">true</option>
+        <format type="color" field="Context">
+          <colorPalette type="map">{"BEFORE":"#6DB7C6","SELECTED":"#DC4E41","AFTER":"#53A051"}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+  <row depends="$show_trends$" id="trends_help">
+    <panel>
+      <html>&lt;div class="fic-help"&gt;&lt;b&gt;Trend / recurrence analysis:&lt;/b&gt; use this page after the immediate incident is understood. The error signature table normalizes changing IDs and large numbers so recurring patterns are easier to spot.&lt;/div&gt;</html>
+    </panel>
+  </row>
+  <row depends="$show_trends$" id="trend_charts">
+    <panel>
+      <chart>
+        <title>Actionable Errors by Category</title>
+        <search base="base_summary">
+          <query>| where Error_Events&gt;0 | timechart span=15m sum(Error_Events) by event_category limit=10 useother=f</query>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="height">300</option>
+        <option name="drilldown">none</option>
+      </chart>
+    </panel>
+    <panel>
+      <chart>
+        <title>HTTP Status Trend</title>
+        <search base="base_summary">
+          <query>| where HTTP_Events&gt;0 AND http_status!="N/A" | timechart span=15m sum(HTTP_Events) by http_status limit=12 useother=f</query>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="height">300</option>
+        <option name="drilldown">none</option>
+      </chart>
+    </panel>
+  </row>
+  <row depends="$show_trends$" id="recurring_signatures">
+    <panel>
+      <table>
+        <title>Recent Recurring Error Signatures — Bounded Evidence</title>
+        <search base="base_error_events">
+          <query>| where (http_status!="200" AND http_status!="201" AND http_status!="N/A") OR (event_category!="Normal" AND event_category!="Warning")
+| stats count AS Occurrences dc(pod) AS Affected_Workloads values(event_category) AS Categories min(_time) AS First_Seen max(_time) AS Last_Seen values(Likely_Owner) AS Likely_Owner by Error_Signature
+| eval Categories=mvjoin(mvindex(Categories,0,3),", "), Likely_Owner=mvjoin(mvindex(Likely_Owner,0,2),", "), First_Seen=strftime(First_Seen,"%Y-%m-%d %H:%M:%S"), Last_Seen=strftime(Last_Seen,"%Y-%m-%d %H:%M:%S")
+| sort 0 - Occurrences | head 30
+| table Occurrences Affected_Workloads Categories First_Seen Last_Seen Likely_Owner Error_Signature</query>
+        </search>
+        <option name="count">30</option>
+        <option name="rowNumbers">true</option>
+        <option name="wrap">true</option>
+        <option name="drilldown">none</option>
+        <option name="link.visible">true</option>
+        <option name="link.exportResults.visible">true</option>
+        <option name="link.openSearch.visible">true</option>
+        <option name="link.inspectSearch.visible">true</option>
+      </table>
+    </panel>
+  </row>
+  <row depends="$show_guide$" id="guide">
+    <panel>
+      <html>
+&lt;div class="fic-help"&gt;
+&lt;h2 style="margin-top:0"&gt;L2/L3 Troubleshooting Flow&lt;/h2&gt;
+&lt;p&gt;&lt;b&gt;1 — Confirm scope:&lt;/b&gt; verify application, data center and time range. Start at 30 minutes.&lt;/p&gt;
+&lt;p&gt;&lt;b&gt;2 — Validate freshness:&lt;/b&gt; stale or missing logs do not prove the application is healthy or unhealthy. Confirm runtime state separately when needed.&lt;/p&gt;
+&lt;p&gt;&lt;b&gt;3 — Choose one path:&lt;/b&gt; use REST API Calls for endpoint/status issues; Workload / VM Host for pod or host concentration; Evidence &amp;amp; Context for correlation and raw proof.&lt;/p&gt;
+&lt;p&gt;&lt;b&gt;4 — Narrow before expanding:&lt;/b&gt; filter to one pod, endpoint or correlation ID before moving from 30 minutes to four or 24 hours.&lt;/p&gt;
+&lt;p&gt;&lt;b&gt;5 — Export evidence:&lt;/b&gt; export the bounded evidence table or open the search in Splunk. Include application, data center, pod/host, first/last seen, endpoint/status, correlation ID and a redacted sample message.&lt;/p&gt;
+&lt;p&gt;&lt;b&gt;Escalate with facts:&lt;/b&gt; state the likely layer and blast radius. Avoid pasting hundreds of workload names or unredacted raw payloads.&lt;/p&gt;
+&lt;/div&gt;</html>
+    </panel>
+  </row>
+</form>
