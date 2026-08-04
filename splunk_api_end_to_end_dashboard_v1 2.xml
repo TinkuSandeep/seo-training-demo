@@ -1,0 +1,366 @@
+<form version="1.1" theme="dark">
+  <label>API End-to-End Call Monitoring</label>
+  <description>Trace API requests from entry point to downstream dependency and final response. Select a problem trace to inspect its complete lifecycle and raw logs.</description>
+
+  <!--
+    FIELD NORMALIZATION
+    This dashboard recognizes common field names and also extracts values from _raw.
+    For best results, map your sourcetypes to these normalized fields:
+      trace_id, endpoint, http_method, http_status, duration_ms,
+      service_name, environment, pod, downstream, stage, message
+  -->
+
+  <fieldset submitButton="true" autoRun="false">
+    <input type="text" token="index_name">
+      <label>Splunk index / application</label>
+      <default>*</default>
+      <prefix>index=</prefix>
+    </input>
+    <input type="time" token="time_range">
+      <label>Time range</label>
+      <default>
+        <earliest>-15m@m</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="text" token="environment_filter">
+      <label>Environment</label>
+      <default>*</default>
+    </input>
+    <input type="text" token="service_filter">
+      <label>Service / pod</label>
+      <default>*</default>
+    </input>
+    <input type="text" token="endpoint_filter">
+      <label>Endpoint contains</label>
+      <default>*</default>
+    </input>
+    <input type="dropdown" token="outcome_filter">
+      <label>Outcome</label>
+      <choice value="*">All outcomes</choice>
+      <choice value="SUCCESS">Success</choice>
+      <choice value="FAILURE">Failure</choice>
+      <choice value="TIMEOUT">Timeout</choice>
+      <choice value="SLOW">Slow success</choice>
+      <choice value="UNKNOWN">Unknown</choice>
+      <default>*</default>
+    </input>
+    <input type="text" token="slow_threshold">
+      <label>Slow threshold (ms)</label>
+      <default>3000</default>
+    </input>
+    <input type="text" token="trace_filter" searchWhenChanged="true">
+      <label>Trace / correlation ID</label>
+    </input>
+  </fieldset>
+
+  <search id="api_base">
+    <query>
+      $index_name$
+      | rex field=_raw max_match=1 "(?i)(?:trace[_-]?id|correlation[_-]?id|request[_-]?id|transaction[_-]?id)[\&quot;'=:\s]+(?&lt;trace_extracted&gt;[A-Za-z0-9._:-]{8,128})"
+      | rex field=_raw max_match=1 "(?i)(?:http[_-]?status|status[_-]?code|response[_-]?code|status)[\&quot;'=:\s]+(?&lt;status_extracted&gt;[1-5][0-9]{2})"
+      | rex field=_raw max_match=1 "(?i)(?:duration[_-]?ms|elapsed[_-]?ms|response[_-]?time[_-]?ms|latency[_-]?ms)[\&quot;'=:\s]+(?&lt;duration_extracted&gt;[0-9]+(?:\.[0-9]+)?)"
+      | rex field=_raw max_match=1 "(?i)(?:method|http[_-]?method|request[_-]?method)[\&quot;'=:\s]+(?&lt;method_extracted&gt;GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)"
+      | rex field=_raw max_match=1 "(?i)(?:uri|url|path|endpoint|route|request[_-]?uri)[\&quot;'=:\s]+(?&lt;endpoint_extracted&gt;/(?:[^\s\&quot;']+))"
+      | eval trace_id=coalesce(trace_id, traceId, correlation_id, correlationId, request_id, requestId, transaction_id, transactionId, trace_extracted)
+      | eval endpoint=coalesce(endpoint, request_uri, uri, path, route, url, api, endpoint_extracted)
+      | eval http_method=upper(coalesce(http_method, request_method, method, method_extracted))
+      | eval http_status=coalesce(http_status, status_code, response_code, status, status_extracted)
+      | eval duration_ms=round(tonumber(coalesce(duration_ms, response_time_ms, elapsed_ms, latency_ms, duration_extracted)),2)
+      | eval service_name=coalesce(service_name, service, app, application, component, container_name, source)
+      | eval environment=coalesce(environment, env, namespace, project, cluster)
+      | eval pod=coalesce(pod, pod_name, kubernetes_pod_name, host)
+      | eval downstream=coalesce(downstream, downstream_service, target_service, peer_service, destination, db_host)
+      | eval event_stage=coalesce(stage, span_name, operation, event, action, logger_name, component)
+      | eval api_message=coalesce(message, msg, error_message, exception, _raw)
+      | eval status_num=tonumber(http_status)
+      | eval is_api=if(isnotnull(endpoint) OR isnotnull(http_method) OR isnotnull(http_status) OR match(_raw,"(?i)\b(GET|POST|PUT|PATCH|DELETE)\s+/|HTTP/[12]\.[01]|REST|API"),1,0)
+      | where is_api=1
+      | eval api_outcome=case(
+          match(_raw,"(?i)timeout|timed out|connection reset|connection refused"),"TIMEOUT",
+          status_num&gt;=400,"FAILURE",
+          status_num&gt;=200 AND status_num&lt;400,"SUCCESS",
+          match(coalesce(log_level,level,severity,""),"(?i)error|fatal|critical"),"FAILURE",
+          true(),"UNKNOWN")
+      | eval is_slow=if(isnotnull(duration_ms) AND duration_ms&gt;=tonumber("$slow_threshold$"),1,0)
+      | eval api_outcome=if(api_outcome="SUCCESS" AND is_slow=1,"SLOW",api_outcome)
+      | eval endpoint=coalesce(endpoint,"UNKNOWN_ENDPOINT"), http_method=coalesce(http_method,"UNKNOWN"), http_status=coalesce(http_status,"NO_CODE")
+      | search environment="$environment_filter$" (service_name="$service_filter$" OR pod="$service_filter$") endpoint="*$endpoint_filter$*"
+      | where "$outcome_filter$"="*" OR api_outcome="$outcome_filter$"
+      | fields _time trace_id endpoint http_method http_status status_num duration_ms service_name environment pod downstream event_stage api_message api_outcome is_slow _raw
+    </query>
+    <earliest>$time_range.earliest$</earliest>
+    <latest>$time_range.latest$</latest>
+    <sampleRatio>1</sampleRatio>
+  </search>
+
+  <row>
+    <panel>
+      <html>
+        <style>
+          .api-note{padding:12px 16px;border-left:4px solid #58a6ff;background:#17202b;color:#dce7f3}
+          .api-note b{color:#ffffff}.api-note code{color:#79c0ff}
+        </style>
+        <div class="api-note">
+          <b>How to use:</b> choose the application index and time range, then click a row in <b>Problem Traces</b>. The selected correlation ID populates the lifecycle and raw-log panels below. For accurate E2E tracing, the same ID must be logged by every participating service.
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <single>
+        <title>Total API Events</title>
+        <search base="api_base">
+          <query>| stats count AS value</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x3c444d","0x2ea043","0x2ea043"]</option>
+        <option name="rangeValues">[1,100]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>Success Rate</title>
+        <search base="api_base">
+          <query>| stats count AS total count(eval(api_outcome="SUCCESS" OR api_outcome="SLOW")) AS ok | eval value=if(total=0,0,round(100*ok/total,2)) | fields value</query>
+        </search>
+        <option name="numberPrecision">0.00</option>
+        <option name="unit">%</option>
+        <option name="colorBy">value</option>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0xd1242f","0xd29922","0x2ea043"]</option>
+        <option name="rangeValues">[95,99]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>Failures + Timeouts</title>
+        <search base="api_base">
+          <query>| stats count(eval(api_outcome="FAILURE" OR api_outcome="TIMEOUT")) AS value</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x2ea043","0xd29922","0xd1242f"]</option>
+        <option name="rangeValues">[1,10]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>P95 Latency</title>
+        <search base="api_base">
+          <query>| stats perc95(duration_ms) AS value | eval value=round(value,2)</query>
+        </search>
+        <option name="unit"> ms</option>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0x2ea043","0xd29922","0xd1242f"]</option>
+        <option name="rangeValues">[1000,3000]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>Trace-ID Coverage</title>
+        <search base="api_base">
+          <query>| stats count AS total count(trace_id) AS traced | eval value=if(total=0,0,round(100*traced/total,2)) | fields value</query>
+        </search>
+        <option name="unit">%</option>
+        <option name="colorMode">block</option>
+        <option name="rangeColors">["0xd1242f","0xd29922","0x2ea043"]</option>
+        <option name="rangeValues">[80,95]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <chart>
+        <title>API Calls Over Time by Outcome</title>
+        <search base="api_base">
+          <query>| timechart span=5m count BY api_outcome limit=0 useother=f</query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+    <panel>
+      <chart>
+        <title>Latency Trend (Average and P95)</title>
+        <search base="api_base">
+          <query>| timechart span=5m avg(duration_ms) AS Average perc95(duration_ms) AS P95 | foreach Average P95 [eval &lt;&lt;FIELD&gt;&gt;=round('&lt;&lt;FIELD&gt;&gt;',2)]</query>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.axisTitleY.text">Milliseconds</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>Endpoint Health — locate the failing or slow API</title>
+        <search base="api_base">
+          <query>
+            | stats count AS Calls count(eval(api_outcome="SUCCESS" OR api_outcome="SLOW")) AS Successful count(eval(api_outcome="FAILURE")) AS Failures count(eval(api_outcome="TIMEOUT")) AS Timeouts avg(duration_ms) AS Avg_ms perc95(duration_ms) AS P95_ms max(duration_ms) AS Max_ms latest(_time) AS Last_seen BY http_method endpoint
+            | eval Success_pct=round(100*Successful/Calls,2), Avg_ms=round(Avg_ms,2), P95_ms=round(P95_ms,2), Max_ms=round(Max_ms,2), Last_seen=strftime(Last_seen,"%Y-%m-%d %H:%M:%S")
+            | sort - Failures - Timeouts - P95_ms
+            | table http_method endpoint Calls Success_pct Failures Timeouts Avg_ms P95_ms Max_ms Last_seen
+          </query>
+        </search>
+        <option name="count">20</option>
+        <option name="dataOverlayMode">heatmap</option>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <chart>
+        <title>HTTP Response Codes</title>
+        <search base="api_base">
+          <query>| stats count BY http_status | sort - count</query>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.legend.placement">none</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+    <panel>
+      <table>
+        <title>Slowest Individual API Calls</title>
+        <search base="api_base">
+          <query>| where isnotnull(duration_ms) | sort 0 - duration_ms | head 20 | eval Time=strftime(_time,"%Y-%m-%d %H:%M:%S") | table Time trace_id service_name pod http_method endpoint http_status api_outcome duration_ms downstream</query>
+        </search>
+        <option name="count">20</option>
+        <option name="drilldown">row</option>
+        <drilldown>
+          <condition field="trace_id">
+            <set token="form.trace_filter">$row.trace_id$</set>
+            <set token="trace_filter">$row.trace_id$</set>
+          </condition>
+        </drilldown>
+        <option name="refresh.display">progressbar</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>Problem Traces — click a row for end-to-end investigation</title>
+        <search base="api_base">
+          <query>
+            | where api_outcome="FAILURE" OR api_outcome="TIMEOUT" OR api_outcome="SLOW"
+            | where isnotnull(trace_id)
+            | stats earliest(_time) AS Started latest(_time) AS Last_seen values(api_outcome) AS Outcome values(service_name) AS Services values(pod) AS Pods values(http_method) AS Method values(endpoint) AS Endpoint values(http_status) AS Status max(duration_ms) AS Max_ms values(downstream) AS Downstream BY trace_id
+            | eval Started=strftime(Started,"%Y-%m-%d %H:%M:%S"), Last_seen=strftime(Last_seen,"%Y-%m-%d %H:%M:%S"), Max_ms=round(Max_ms,2)
+            | sort 0 - Last_seen
+            | table trace_id Started Last_seen Outcome Services Pods Method Endpoint Status Max_ms Downstream
+          </query>
+        </search>
+        <option name="count">25</option>
+        <option name="drilldown">row</option>
+        <drilldown>
+          <set token="form.trace_filter">$row.trace_id$</set>
+          <set token="trace_filter">$row.trace_id$</set>
+        </drilldown>
+        <option name="refresh.display">progressbar</option>
+      </table>
+    </panel>
+  </row>
+
+  <row depends="$trace_filter$">
+    <panel>
+      <html>
+        <div class="api-note"><b>Selected trace:</b> <code>$trace_filter$</code>. Events below are ordered chronologically to show where the call slowed down or failed.</div>
+      </html>
+    </panel>
+  </row>
+
+  <row depends="$trace_filter$">
+    <panel>
+      <table>
+        <title>Selected Trace — End-to-End Lifecycle</title>
+        <search>
+          <query>
+            $index_name$ "$trace_filter$"
+            | rex field=_raw max_match=1 "(?i)(?:http[_-]?status|status[_-]?code|response[_-]?code|status)[\&quot;'=:\s]+(?&lt;status_extracted&gt;[1-5][0-9]{2})"
+            | rex field=_raw max_match=1 "(?i)(?:duration[_-]?ms|elapsed[_-]?ms|response[_-]?time[_-]?ms|latency[_-]?ms)[\&quot;'=:\s]+(?&lt;duration_extracted&gt;[0-9]+(?:\.[0-9]+)?)"
+            | rex field=_raw max_match=1 "(?i)(?:method|http[_-]?method|request[_-]?method)[\&quot;'=:\s]+(?&lt;method_extracted&gt;GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)"
+            | rex field=_raw max_match=1 "(?i)(?:uri|url|path|endpoint|route|request[_-]?uri)[\&quot;'=:\s]+(?&lt;endpoint_extracted&gt;/(?:[^\s\&quot;']+))"
+            | eval Service=coalesce(service_name,service,app,application,component,container_name,source)
+            | eval Pod=coalesce(pod,pod_name,kubernetes_pod_name,host)
+            | eval Method=upper(coalesce(http_method,request_method,method,method_extracted))
+            | eval Endpoint=coalesce(endpoint,request_uri,uri,path,route,url,api,endpoint_extracted)
+            | eval Status=coalesce(http_status,status_code,response_code,status,status_extracted)
+            | eval Duration_ms=round(tonumber(coalesce(duration_ms,response_time_ms,elapsed_ms,latency_ms,duration_extracted)),2)
+            | eval Downstream=coalesce(downstream,downstream_service,target_service,peer_service,destination,db_host)
+            | eval Detail=coalesce(message,msg,error_message,exception,event,action,operation,span_name)
+            | eval Lifecycle_stage=case(
+                match(_raw,"(?i)ingress|gateway|load balancer|received request"),"1. Request entry",
+                match(_raw,"(?i)authentication|authorization|oauth|token|jwt"),"2. Authentication",
+                match(_raw,"(?i)outbound|downstream|external api|http client|rest client"),"4. Downstream API",
+                match(_raw,"(?i)database|datasource|jdbc|sql|oracle|stored procedure"),"5. Database",
+                match(_raw,"(?i)timeout|exception|error|failed|failure|http[_ ]?5[0-9]{2}"),"6. Failure",
+                match(_raw,"(?i)response|completed|returned|sent response"),"7. Final response",
+                true(),"3. Application processing")
+            | eval Time=strftime(_time,"%Y-%m-%d %H:%M:%S.%3N")
+            | sort 0 _time
+            | streamstats count AS Step
+            | table Step Time Lifecycle_stage Service Pod Method Endpoint Downstream Status Duration_ms Detail
+          </query>
+          <earliest>$time_range.earliest$</earliest>
+          <latest>$time_range.latest$</latest>
+        </search>
+        <option name="count">50</option>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="refresh.display">progressbar</option>
+      </table>
+    </panel>
+  </row>
+
+  <row depends="$trace_filter$">
+    <panel>
+      <table>
+        <title>Selected Trace — Raw Logs (use Export → CSV when handing off)</title>
+        <search>
+          <query>
+            $index_name$ "$trace_filter$"
+            | eval Time=strftime(_time,"%Y-%m-%d %H:%M:%S.%3N")
+            | eval Service=coalesce(service_name,service,app,application,component,container_name,source)
+            | eval Pod=coalesce(pod,pod_name,kubernetes_pod_name,host)
+            | sort 0 _time
+            | table Time Service Pod source sourcetype _raw
+          </query>
+          <earliest>$time_range.earliest$</earliest>
+          <latest>$time_range.latest$</latest>
+        </search>
+        <option name="count">50</option>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="refresh.display">progressbar</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <html>
+        <div class="api-note">
+          <b>Logging requirement:</b> every gateway, application service, outbound API client, and database layer should log the same <code>trace_id</code> or <code>correlation_id</code>. Without that shared value, Splunk can show API symptoms but cannot reliably reconstruct the complete request journey.
+        </div>
+      </html>
+    </panel>
+  </row>
+</form>
