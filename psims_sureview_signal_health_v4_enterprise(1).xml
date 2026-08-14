@@ -1,0 +1,392 @@
+<form version="1.1" theme="dark">
+  <label>PSIMS / SureView Enterprise Signal Flow Health - v4</label>
+  <description>Production-grade observability dashboard for verified CloudLink Windows Application events. Uses same-time-of-day 5-day baselines, data-freshness checks, host-level flow comparison, anomaly candidates, diagnostic errors, and validated-no-data handling. DB queue telemetry is intentionally deferred until schema confirmation.</description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="time" token="diag_time">
+      <label>Diagnostic Time Range</label>
+      <default>
+        <earliest>-4h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+
+    <input type="dropdown" token="host_tok" searchWhenChanged="true">
+      <label>OpsLink / CloudLink Host</label>
+      <choice value="*">All Verified Hosts</choice>
+      <default>*</default>
+      <fieldForLabel>host</fieldForLabel>
+      <fieldForValue>host</fieldForValue>
+      <search>
+        <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client"
+| search host IN ("GPWMA00A0001","GPWMA00A0002","GRWMA00A0001","GRWMA00A0002")
+| stats count by host
+| sort host
+| fields host</query>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </search>
+    </input>
+
+    <input type="dropdown" token="warn_pct" searchWhenChanged="true">
+      <label>Baseline Warning %</label>
+      <choice value="15">15%</choice>
+      <choice value="20">20%</choice>
+      <choice value="25">25%</choice>
+      <choice value="30">30%</choice>
+      <default>20</default>
+    </input>
+
+    <input type="dropdown" token="crit_pct" searchWhenChanged="true">
+      <label>Baseline Critical %</label>
+      <choice value="30">30%</choice>
+      <choice value="40">40%</choice>
+      <choice value="50">50%</choice>
+      <choice value="75">75%</choice>
+      <default>40</default>
+    </input>
+
+    <input type="dropdown" token="fresh_warn" searchWhenChanged="true">
+      <label>No-Activity Warning</label>
+      <choice value="3">3 min</choice>
+      <choice value="5">5 min</choice>
+      <choice value="10">10 min</choice>
+      <default>5</default>
+    </input>
+
+    <input type="dropdown" token="fresh_crit" searchWhenChanged="true">
+      <label>No-Activity Critical</label>
+      <choice value="5">5 min</choice>
+      <choice value="10">10 min</choice>
+      <choice value="15">15 min</choice>
+      <default>10</default>
+    </input>
+  </fieldset>
+
+  <!-- Executive health row -->
+  <row>
+    <panel>
+      <single>
+        <title>Overall Signal-Pipeline Health</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ earliest=-5d@d latest=now
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| where Day=Today OR SecIntoDay&lt;=Cutoff
+| stats count as Total count(eval(EventCode=33)) as E33 count(eval(EventCode=34)) as E34 count(eval(EventCode=55)) as E55 latest(_time) as LastSeen dc(host) as ActiveHosts by Day
+| eventstats avg(eval(if(Day&lt;Today,Total,null()))) as BaseTotal avg(eval(if(Day&lt;Today,E55,null()))) as Base55
+| where Day=Today
+| eval VolumeVar=if(BaseTotal&gt;0,((Total-BaseTotal)/BaseTotal)*100,null()), Error55Var=if(Base55&gt;0,((E55-Base55)/Base55)*100,null()), AgeMin=if(isnull(LastSeen),999999,(now()-LastSeen)/60)
+| eval Health=case(isnull(LastSeen),"UNKNOWN - NO DATA",AgeMin&gt;=$fresh_crit$,"CRITICAL - CLOUDLINK SILENT",VolumeVar&gt;=$crit_pct$,"CRITICAL - VOLUME ANOMALY",Error55Var&gt;=$crit_pct$,"CRITICAL - EVENT55 ANOMALY",AgeMin&gt;=$fresh_warn$,"WARNING - ACTIVITY STALE",VolumeVar&gt;=$warn_pct$,"WARNING - VOLUME ABOVE BASELINE",Error55Var&gt;=$warn_pct$,"WARNING - EVENT55 ABOVE BASELINE",true(),"NORMAL")
+| fields Health</query>
+          <earliest>-5d@d</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="colorMode">block</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Today vs 5-Day Same-Time Baseline</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ earliest=-5d@d latest=now
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| where Day=Today OR SecIntoDay&lt;=Cutoff
+| stats count as Events by Day
+| eventstats avg(eval(if(Day&lt;Today,Events,null()))) as FiveDayAvg
+| where Day=Today
+| eval Percent=if(FiveDayAvg&gt;0,round(((Events-FiveDayAvg)/FiveDayAvg)*100,1),null())
+| eval Result=if(isnull(Percent),"UNKNOWN",tostring(Percent)."%")
+| fields Result</query>
+          <earliest>-5d@d</earliest><latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Minutes Since Last CloudLink Activity</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$
+| stats latest(_time) as LastSeen
+| eval Minutes=if(isnull(LastSeen),null(),round((now()-LastSeen)/60,1))
+| fields Minutes</query>
+          <earliest>-24h@h</earliest><latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Verified Hosts Active (24h)</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client"
+| search host IN ("GPWMA00A0001","GPWMA00A0002","GRWMA00A0001","GRWMA00A0002")
+| stats dc(host) as ActiveHosts
+| eval Result=ActiveHosts." / 4"
+| fields Result</query>
+          <earliest>-24h@h</earliest><latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+  </row>
+
+  <!-- Baseline metric cards -->
+  <row>
+    <panel>
+      <single>
+        <title>Event 33 vs 5-Day Same-Time Avg</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ EventCode=33 earliest=-5d@d latest=now
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| where Day=Today OR SecIntoDay&lt;=Cutoff
+| stats count as Events by Day
+| eventstats avg(eval(if(Day&lt;Today,Events,null()))) as Base
+| where Day=Today
+| eval Pct=if(Base&gt;0,round(((Events-Base)/Base)*100,1),null()), Status=case(isnull(Pct),"UNKNOWN",Pct&gt;=$crit_pct$,"CRITICAL",Pct&gt;=$warn_pct$,"WARNING",true(),"NORMAL")
+| eval Result=Status." | ".Pct."% | Now=".Events." | Avg=".round(Base,0)
+| fields Result</query>
+          <earliest>-5d@d</earliest><latest>now</latest>
+        </search><option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Event 34 vs 5-Day Same-Time Avg</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ EventCode=34 earliest=-5d@d latest=now
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| where Day=Today OR SecIntoDay&lt;=Cutoff
+| stats count as Events by Day
+| eventstats avg(eval(if(Day&lt;Today,Events,null()))) as Base
+| where Day=Today
+| eval Pct=if(Base&gt;0,round(((Events-Base)/Base)*100,1),null()), Status=case(isnull(Pct),"UNKNOWN",Pct&gt;=$crit_pct$,"CRITICAL",Pct&gt;=$warn_pct$,"WARNING",true(),"NORMAL")
+| eval Result=Status." | ".Pct."% | Now=".Events." | Avg=".round(Base,0)
+| fields Result</query>
+          <earliest>-5d@d</earliest><latest>now</latest>
+        </search><option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Event 55 vs 5-Day Same-Time Avg</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ EventCode=55 earliest=-5d@d latest=now
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| where Day=Today OR SecIntoDay&lt;=Cutoff
+| stats count as Events by Day
+| eventstats avg(eval(if(Day&lt;Today,Events,null()))) as Base
+| where Day=Today
+| eval Pct=if(Base&gt;0,round(((Events-Base)/Base)*100,1),null()), Status=case(isnull(Pct),"UNKNOWN",Pct&gt;=$crit_pct$,"CRITICAL",Pct&gt;=$warn_pct$,"WARNING",true(),"NORMAL")
+| eval Result=Status." | ".Pct."% | Now=".Events." | Avg=".round(Base,0)
+| fields Result</query>
+          <earliest>-5d@d</earliest><latest>now</latest>
+        </search><option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Event 33 / 34 Count Gap (Diagnostic Range)</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ (EventCode=33 OR EventCode=34)
+| stats count(eval(EventCode=33)) as Received33 count(eval(EventCode=34)) as Sent34
+| eval Gap=Received33-Sent34, GapPct=if(Received33&gt;0,round((Gap/Received33)*100,2),null())
+| eval Result="Gap=".Gap." | ".GapPct."%"
+| fields Result</query>
+          <earliest>$diag_time.earliest$</earliest><latest>$diag_time.latest$</latest>
+        </search><option name="drilldown">none</option>
+      </single>
+    </panel>
+  </row>
+
+  <!-- Same-time baseline comparison -->
+  <row>
+    <panel>
+      <table>
+        <title>Today vs Previous 5 Days at the Same Time of Day</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ earliest=-5d@d latest=now
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| where Day=Today OR SecIntoDay&lt;=Cutoff
+| stats count as Total count(eval(EventCode=33)) as Event33 count(eval(EventCode=34)) as Event34 count(eval(EventCode=55)) as Event55 by Day
+| eval IsToday=if(Day=Today,1,0), Date=strftime(Day,"%Y-%m-%d")
+| eventstats avg(eval(if(IsToday=0,Total,null()))) as AvgTotal avg(eval(if(IsToday=0,Event33,null()))) as Avg33 avg(eval(if(IsToday=0,Event34,null()))) as Avg34 avg(eval(if(IsToday=0,Event55,null()))) as Avg55
+| eval TotalVarPct=round(((Total-AvgTotal)/AvgTotal)*100,1), E33VarPct=round(((Event33-Avg33)/Avg33)*100,1), E34VarPct=round(((Event34-Avg34)/Avg34)*100,1), E55VarPct=round(((Event55-Avg55)/Avg55)*100,1)
+| eval Status=if(IsToday=1,case(TotalVarPct&gt;=$crit_pct$ OR E55VarPct&gt;=$crit_pct$,"CRITICAL",TotalVarPct&gt;=$warn_pct$ OR E55VarPct&gt;=$warn_pct$,"WARNING",true(),"NORMAL"),"BASELINE DAY")
+| table Date IsToday Total AvgTotal TotalVarPct Event33 Avg33 E33VarPct Event34 Avg34 E34VarPct Event55 Avg55 E55VarPct Status
+| sort - Date</query>
+          <earliest>-5d@d</earliest><latest>now</latest>
+        </search>
+        <option name="count">10</option>
+        <option name="wrap">false</option>
+      </table>
+    </panel>
+  </row>
+
+  <!-- Trend and per-host health -->
+  <row>
+    <panel>
+      <chart>
+        <title>Received (33) vs Sent (34) - Diagnostic Trend</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ (EventCode=33 OR EventCode=34)
+| eval Flow=case(EventCode=33,"Event 33",EventCode=34,"Event 34")
+| timechart span=5m count by Flow</query>
+          <earliest>$diag_time.earliest$</earliest><latest>$diag_time.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <chart>
+        <title>Event 55 Trend - Review / Error Candidate</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ EventCode=55
+| timechart span=5m count as Event55</query>
+          <earliest>$diag_time.earliest$</earliest><latest>$diag_time.latest$</latest>
+        </search>
+        <option name="charting.chart">column</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>Enterprise Host Health Matrix</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client"
+| search host IN ("GPWMA00A0001","GPWMA00A0002","GRWMA00A0001","GRWMA00A0002")
+| search host=$host_tok$
+| stats count as Total count(eval(EventCode=33)) as Event33 count(eval(EventCode=34)) as Event34 count(eval(EventCode=55)) as Event55 latest(_time) as LastSeen by host
+| eval AgeMin=round((now()-LastSeen)/60,1), Gap=Event33-Event34, GapPct=if(Event33&gt;0,round((Gap/Event33)*100,2),null())
+| eval Health=case(isnull(LastSeen),"UNKNOWN",AgeMin&gt;=$fresh_crit$,"CRITICAL - NO ACTIVITY",AgeMin&gt;=$fresh_warn$,"WARNING - STALE",true(),"ACTIVE")
+| eval LastSeen=strftime(LastSeen,"%Y-%m-%d %H:%M:%S")
+| table host Health AgeMin Total Event33 Event34 Gap GapPct Event55 LastSeen
+| sort host</query>
+          <earliest>$diag_time.earliest$</earliest><latest>$diag_time.latest$</latest>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+      </table>
+    </panel>
+  </row>
+
+  <!-- Alert candidates -->
+  <row>
+    <panel>
+      <table>
+        <title>Baseline Alert Candidates - Returns Rows Only When Threshold Is Breached</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-5d@d latest=now
+| search host IN ("GPWMA00A0001","GPWMA00A0002","GRWMA00A0001","GRWMA00A0002")
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| where Day=Today OR SecIntoDay&lt;=Cutoff
+| stats count as Total count(eval(EventCode=33)) as E33 count(eval(EventCode=34)) as E34 count(eval(EventCode=55)) as E55 latest(_time) as LastSeen by host Day
+| eventstats avg(eval(if(Day&lt;Today,Total,null()))) as AvgTotal avg(eval(if(Day&lt;Today,E55,null()))) as Avg55 by host
+| where Day=Today
+| eval TotalVarPct=if(AvgTotal&gt;0,round(((Total-AvgTotal)/AvgTotal)*100,1),null()), E55VarPct=if(Avg55&gt;0,round(((E55-Avg55)/Avg55)*100,1),null()), AgeMin=round((now()-LastSeen)/60,1)
+| eval Trigger=case(AgeMin&gt;=$fresh_crit$,"CRITICAL: NO CLOUDLINK ACTIVITY",TotalVarPct&gt;=$crit_pct$,"CRITICAL: TOTAL VOLUME ABOVE BASELINE",E55VarPct&gt;=$crit_pct$,"CRITICAL: EVENT55 ABOVE BASELINE",AgeMin&gt;=$fresh_warn$,"WARNING: CLOUDLINK ACTIVITY STALE",TotalVarPct&gt;=$warn_pct$,"WARNING: TOTAL VOLUME ABOVE BASELINE",E55VarPct&gt;=$warn_pct$,"WARNING: EVENT55 ABOVE BASELINE",true(),null())
+| where isnotnull(Trigger)
+| eval LastSeen=strftime(LastSeen,"%Y-%m-%d %H:%M:%S")
+| table host Trigger Total AvgTotal TotalVarPct E55 Avg55 E55VarPct E33 E34 AgeMin LastSeen
+| sort Trigger host</query>
+          <earliest>-5d@d</earliest><latest>now</latest>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <!-- Diagnostics -->
+  <row>
+    <panel>
+      <table>
+        <title>CloudLink Suspicious / Error-Like Messages</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$
+| search (EventCode=55 OR Message="*invalid_signal*" OR Message="*Failed to decode signal*" OR Message="*Timeout*" OR Message="*exception*" OR Message="*failed*" OR Message="*error*")
+| eval EventTime=strftime(_time,"%Y-%m-%d %H:%M:%S")
+| table EventTime host EventCode Type Message
+| sort - EventTime</query>
+          <earliest>$diag_time.earliest$</earliest><latest>$diag_time.latest$</latest>
+        </search>
+        <option name="count">25</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <chart>
+        <title>Observed Security / Communication Signal Codes</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" host=$host_tok$
+| rex field=Message max_match=0 "(?i)(?&lt;SignalCode&gt;s007|aBU|rBU|aPN|rPN|s016|s017|s072|s073|s087|s121|aSV|rSV|tSV|tA1|rA1|dA1)"
+| mvexpand SignalCode
+| stats count by SignalCode
+| sort - count</query>
+          <earliest>$diag_time.earliest$</earliest><latest>$diag_time.latest$</latest>
+        </search>
+        <option name="charting.chart">bar</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <table>
+        <title>Critical Communication / Alarm Candidates</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" host=$host_tok$
+| search Message="*s016*" OR Message="*s072*" OR Message="*s087*" OR Message="*aBU*" OR Message="*aPN*" OR Message="*invalid_signal*" OR Message="*Timeout*"
+| eval EventTime=strftime(_time,"%Y-%m-%d %H:%M:%S")
+| table EventTime host SourceName EventCode Type Message
+| sort - EventTime</query>
+          <earliest>$diag_time.earliest$</earliest><latest>$diag_time.latest$</latest>
+        </search>
+        <option name="count">25</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>Raw CloudLink Diagnostics</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$
+| eval EventTime=strftime(_time,"%Y-%m-%d %H:%M:%S")
+| eval Meaning=case(EventCode=33,"Observed Event 33",EventCode=34,"Observed Event 34",EventCode=41,"Tunnel Candidate 41",EventCode=48,"Tunnel Candidate 48",EventCode=49,"Tunnel Candidate 49",EventCode=55,"Review Event 55",true(),"Other")
+| table EventTime host EventCode Meaning Type Message
+| sort - EventTime</query>
+          <earliest>$diag_time.earliest$</earliest><latest>$diag_time.latest$</latest>
+        </search>
+        <option name="count">50</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <html>
+        <h2>Enterprise Monitoring Notes</h2>
+        <p><b>Baseline design:</b> Today's cumulative event volume is compared with the previous five days only up to the same time of day. This avoids comparing a partial production day with five complete days.</p>
+        <p><b>No-data safety:</b> Missing or stale CloudLink data is never treated as healthy. The dashboard reports UNKNOWN, WARNING, or CRITICAL based on the freshness thresholds above.</p>
+        <p><b>Event semantics:</b> Event 33, 34, and 55 are monitored as observed CloudLink event IDs. Their exact business meaning should remain provisional until validated against vendor documentation or confirmed raw-message patterns.</p>
+        <p><b>Phase 2 - DB queue:</b> Queue depth, oldest pending signal, drain rate, enqueue rate, last processed signal, and queue-stall detection will be added when the production queue table/schema is confirmed.</p>
+      </html>
+    </panel>
+  </row>
+</form>
