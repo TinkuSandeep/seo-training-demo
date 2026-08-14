@@ -1,0 +1,240 @@
+<form version="1.1" theme="dark">
+  <label>PSIMS / SureView Signal Flow Health - v2 TEST</label>
+  <description>Test dashboard using verified Windows Application Event data from index=winos. DB queue panels are intentionally excluded until DB schema is confirmed.</description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="time" token="time_tok">
+      <label>Time Range</label>
+      <default>
+        <earliest>-4h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+
+    <input type="dropdown" token="host_tok" searchWhenChanged="true">
+      <label>OpsLink / CloudLink Host</label>
+      <choice value="*">All Verified Hosts</choice>
+      <default>*</default>
+      <fieldForLabel>host</fieldForLabel>
+      <fieldForValue>host</fieldForValue>
+      <search>
+        <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client"
+| search host IN ("GPWMA00A0001","GPWMA00A0002","GRWMA00A0001","GRWMA00A0002")
+| stats count by host
+| sort host
+| fields host</query>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </search>
+    </input>
+  </fieldset>
+
+  <row>
+    <panel>
+      <single>
+        <title>Overall CloudLink Flow</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$
+| stats count(eval(EventCode=33)) as received count(eval(EventCode=34)) as sent count(eval(EventCode=55)) as event55 latest(_time) as last_seen
+| eval age_min=round((now()-last_seen)/60,1)
+| eval health=case(isnull(last_seen),"UNKNOWN", age_min&gt;=10,"NO DATA", received&gt;0 AND sent&gt;0,"ACTIVE", received&gt;0 AND sent=0,"CHECK", true(),"UNKNOWN")
+| fields health</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="colorMode">block</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Message Received (Event 33)</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ EventCode=33
+| stats count as received</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Message Sent (Event 34)</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ EventCode=34
+| stats count as sent</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Event 55 Count</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ EventCode=55
+| stats count as event55</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Minutes Since Last CloudLink Event</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$
+| stats latest(_time) as last_seen
+| eval minutes_since=round((now()-last_seen)/60,1)
+| fields minutes_since</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <chart>
+        <title>Received vs Sent Trend</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ (EventCode=33 OR EventCode=34)
+| eval Flow=case(EventCode=33,"Received",EventCode=34,"Sent")
+| timechart span=5m count by Flow</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <chart>
+        <title>CloudLink Event ID Trend</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$ EventCode IN (33,34,41,48,49,55)
+| eval EventMeaning=case(EventCode=33,"33 - Message Received",EventCode=34,"34 - Message Sent",EventCode=41,"41 - Tunnel Requested",EventCode=48,"48 - Tunnel Stopped",EventCode=49,"49 - Tunnel Ended",EventCode=55,"55 - Review Event")
+| timechart span=5m count by EventMeaning limit=10</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>Flow by Verified Host</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client"
+| search host IN ("GPWMA00A0001","GPWMA00A0002","GRWMA00A0001","GRWMA00A0002")
+| search host=$host_tok$
+| stats count(eval(EventCode=33)) as Received count(eval(EventCode=34)) as Sent count(eval(EventCode=41)) as TunnelRequested count(eval(EventCode=48)) as TunnelStopped count(eval(EventCode=49)) as TunnelEnded count(eval(EventCode=55)) as Event55 latest(_time) as LastSeen by host
+| eval Delta=Received-Sent
+| eval LastSeen=strftime(LastSeen,"%Y-%m-%d %H:%M:%S")
+| sort host</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="count">20</option>
+        <option name="drilldown">row</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>CloudLink Errors / Suspicious Messages</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$
+| search (EventCode=55 OR Message="*invalid_signal*" OR Message="*Failed to decode signal*" OR Message="*Timeout*" OR Message="*exception*" OR Message="*failed*" OR Message="*error*")
+| eval EventTime=strftime(_time,"%Y-%m-%d %H:%M:%S")
+| table EventTime host EventCode Type Message
+| sort - EventTime</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <chart>
+        <title>Known Signal / Communication Codes Observed in Message</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" host=$host_tok$
+| rex field=Message max_match=0 "(?i)(?&lt;SignalCode&gt;s007|aBU|rBU|aPN|rPN|s016|s017|s072|s073|s087|s121|aSV|rSV|tSV|tA1|rA1|dA1)"
+| mvexpand SignalCode
+| stats count by SignalCode
+| sort - count</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="charting.chart">bar</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <table>
+        <title>Critical Communication / Alarm Signal Messages</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" host=$host_tok$
+| search Message="*s016*" OR Message="*s072*" OR Message="*s087*" OR Message="*aBU*" OR Message="*aPN*" OR Message="*invalid_signal*" OR Message="*Timeout*"
+| eval EventTime=strftime(_time,"%Y-%m-%d %H:%M:%S")
+| table EventTime host SourceName EventCode Type Message
+| sort - EventTime</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>Recent CloudLink Events - Raw Diagnostic View</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" host=$host_tok$
+| eval EventTime=strftime(_time,"%Y-%m-%d %H:%M:%S")
+| eval Meaning=case(EventCode=33,"Message Received",EventCode=34,"Message Sent",EventCode=41,"Tunnel Requested",EventCode=48,"Tunnel Stopped",EventCode=49,"Tunnel Ended",EventCode=55,"Review Event 55",true(),"Other")
+| table EventTime host EventCode Meaning Type Message
+| sort - EventTime</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="count">50</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <html>
+        <h2>DB Queue Monitoring - Pending Monday</h2>
+        <p>This test version intentionally does not fabricate queue depth, oldest queued signal, drain rate, or stalled-signal metrics. Those panels will be added after the DB table and timestamp/status columns are confirmed.</p>
+        <p><b>Important:</b> Event 55 is shown as "Review Event" until its exact semantics are validated from the raw messages/vendor documentation.</p>
+      </html>
+    </panel>
+  </row>
+</form>
