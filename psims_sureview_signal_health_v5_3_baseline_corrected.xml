@@ -1,0 +1,507 @@
+<form version="1.1" theme="dark">
+  <label>PSIMS / SureView Enterprise Signal Flow Health - v5.3 BASELINE CORRECTED</label>
+  <description>V5.3-20260815: production-ready combined four-host five-minute detector with normalized slot keys and data-present-only averages. This prevents scaffold zero rows from halving the baseline and producing false spikes. Verified active-active hosts are GPVWA00A0001, GPVWA00A0002, GRVWA00A0001, and GRVWA00A0002. DB queue telemetry remains deferred until schema confirmation.</description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="time" token="diag_time">
+      <label>Diagnostic Time Range</label>
+      <default>
+        <earliest>-4h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+
+    <input type="dropdown" token="host_tok" searchWhenChanged="true">
+      <label>OpsLink / CloudLink Host</label>
+      <choice value="*">All Verified Hosts</choice>
+      <choice value="GPVWA00A0001">GPVWA00A0001</choice>
+      <choice value="GPVWA00A0002">GPVWA00A0002</choice>
+      <choice value="GRVWA00A0001">GRVWA00A0001</choice>
+      <choice value="GRVWA00A0002">GRVWA00A0002</choice>
+      <default>*</default>
+    </input>
+
+    <input type="dropdown" token="warn_pct" searchWhenChanged="true">
+      <label>Baseline Warning %</label>
+      <choice value="15">15%</choice>
+      <choice value="20">20%</choice>
+      <choice value="25">25%</choice>
+      <choice value="30">30%</choice>
+      <default>20</default>
+    </input>
+
+    <input type="dropdown" token="crit_pct" searchWhenChanged="true">
+      <label>Baseline Critical %</label>
+      <choice value="30">30%</choice>
+      <choice value="40">40%</choice>
+      <choice value="50">50%</choice>
+      <choice value="75">75%</choice>
+      <default>40</default>
+    </input>
+
+    <input type="dropdown" token="fresh_warn" searchWhenChanged="true">
+      <label>No-Activity Warning</label>
+      <choice value="3">3 min</choice>
+      <choice value="5">5 min</choice>
+      <choice value="10">10 min</choice>
+      <default>5</default>
+    </input>
+
+    <input type="dropdown" token="fresh_crit" searchWhenChanged="true">
+      <label>No-Activity Critical</label>
+      <choice value="5">5 min</choice>
+      <choice value="10">10 min</choice>
+      <choice value="15">15 min</choice>
+      <default>10</default>
+    </input>
+  </fieldset>
+
+  <!-- One transformed five-day search feeds every baseline panel. The 24-row
+       scaffold guarantees four hosts x six calendar days, including zero-data days. -->
+  <search id="baseline_base">
+    <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-5d@d latest=now
+| eval host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| eval InSameTime=if(Day=Today OR SecIntoDay&lt;=Cutoff,1,0)
+| stats count(eval(InSameTime=1)) as Total count(eval(InSameTime=1 AND EventCode=23 AND Type=1)) as E23 count(eval(InSameTime=1 AND EventCode=33)) as E33 count(eval(InSameTime=1 AND EventCode=34)) as E34 count(eval(InSameTime=1 AND EventCode=55)) as E55 max(eval(if(InSameTime=1,_time,null()))) as LastSeen count as FullDayEvents by host Day
+| eval DataPresent=if(FullDayEvents&gt;0,1,0)
+| append [ | makeresults count=24
+    | streamstats count as n
+    | eval host=case(n&lt;=6,"GPVWA00A0001",n&lt;=12,"GPVWA00A0002",n&lt;=18,"GRVWA00A0001",true(),"GRVWA00A0002"), Offset=(n-1)%6
+    | eval Day=case(Offset=0,relative_time(now(),"@d"),Offset=1,relative_time(now(),"-1d@d"),Offset=2,relative_time(now(),"-2d@d"),Offset=3,relative_time(now(),"-3d@d"),Offset=4,relative_time(now(),"-4d@d"),true(),relative_time(now(),"-5d@d")), Total=0, E23=0, E33=0, E34=0, E55=0, DataPresent=0
+    | fields host Day Total E23 E33 E34 E55 DataPresent ]
+| stats sum(Total) as Total sum(E23) as E23 sum(E33) as E33 sum(E34) as E34 sum(E55) as E55 max(LastSeen) as LastSeen max(DataPresent) as DataPresent by host Day
+| eval Today=relative_time(now(),"@d"), IsToday=if(Day=Today,1,0)</query>
+    <earliest>-5d@d</earliest>
+    <latest>now</latest>
+  </search>
+
+  <!-- Seeded freshness search retains silent hosts instead of dropping them. -->
+  <search id="freshness_base">
+    <query>| makeresults count=4
+| streamstats count as n
+| eval host=case(n=1,"GPVWA00A0001",n=2,"GPVWA00A0002",n=3,"GRVWA00A0001",true(),"GRVWA00A0002"), LastSeen=null(), Total24h=0, DMP23_15m=0
+| fields host LastSeen Total24h DMP23_15m
+| append [ search index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-24h latest=now
+    | eval host=upper(mvindex(split(host,"."),0))
+    | search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+    | stats count as Total24h latest(_time) as LastSeen count(eval(_time&gt;=relative_time(now(),"-15m") AND EventCode=23 AND Type=1)) as DMP23_15m by host ]
+| stats max(LastSeen) as LastSeen max(Total24h) as Total24h max(DMP23_15m) as DMP23_15m by host
+| eval AgeMin=if(isnull(LastSeen),999999,round((now()-LastSeen)/60,1)), LastSeenText=if(isnull(LastSeen),"NO DATA IN 24H",strftime(LastSeen,"%Y-%m-%d %H:%M:%S"))</query>
+    <earliest>-24h</earliest>
+    <latest>now</latest>
+  </search>
+
+  <!-- Combined active-active burst detector. Uses the last fully completed
+       five-minute interval and the identical local time slot on five prior days. -->
+  <search id="interval_base">
+    <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-6d@d latest=now
+| eval host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| eval BucketStart=floor(_time/300)*300, CurrentBucket=floor(now()/300)*300-300, CurrentDay=relative_time(CurrentBucket,"@d"), Day=relative_time(BucketStart,"@d"), Slot=BucketStart-Day, CurrentSlot=CurrentBucket-CurrentDay
+| where BucketStart=CurrentBucket OR (Day&gt;=relative_time(CurrentDay,"-5d@d") AND Day&lt;CurrentDay AND Slot=CurrentSlot)
+| stats count as Total count(eval(EventCode=33)) as E33 count(eval(EventCode=34)) as E34 count(eval(EventCode=55)) as E55 count(eval(EventCode=55 AND Type="Error")) as E55Error dc(host) as HostsWithData by BucketStart
+| eval DataPresent=1, IsCurrent=if(BucketStart=CurrentBucket,1,0)
+| append [ | makeresults count=6
+    | streamstats count as n
+    | eval Offset=n-1, CurrentBucket=floor(now()/300)*300-300
+    | eval BucketStart=case(Offset=0,CurrentBucket,Offset=1,relative_time(CurrentBucket,"-1d"),Offset=2,relative_time(CurrentBucket,"-2d"),Offset=3,relative_time(CurrentBucket,"-3d"),Offset=4,relative_time(CurrentBucket,"-4d"),true(),relative_time(CurrentBucket,"-5d")), Total=0, E33=0, E34=0, E55=0, E55Error=0, HostsWithData=0, DataPresent=0, IsCurrent=if(Offset=0,1,0)
+    | fields BucketStart Total E33 E34 E55 E55Error HostsWithData DataPresent IsCurrent ]
+| eval BucketKey=strftime(BucketStart,"%Y-%m-%d %H:%M")
+| stats sum(Total) as Total sum(E33) as E33 sum(E34) as E34 sum(E55) as E55 sum(E55Error) as E55Error max(HostsWithData) as HostsWithData max(DataPresent) as DataPresent max(IsCurrent) as IsCurrent by BucketKey
+| eval BucketStart=strptime(BucketKey,"%Y-%m-%d %H:%M")
+| sort BucketStart</query>
+    <earliest>-6d@d</earliest>
+    <latest>now</latest>
+  </search>
+
+  <row>
+    <panel>
+      <single>
+        <title>Overall Signal-Pipeline Health</title>
+        <search base="freshness_base">
+          <query>| search host="$host_tok$"
+| eval Priority=case(DMP23_15m&gt;0,5,isnull(LastSeen),5,AgeMin&gt;=$fresh_crit$,5,AgeMin&gt;=$fresh_warn$,3,true(),1)
+| eventstats max(Priority) as WorstPriority
+| where Priority=WorstPriority
+| stats values(host) as AffectedHosts max(AgeMin) as MaxAge sum(DMP23_15m) as DMP23_15m by WorstPriority
+| eval Health=case(WorstPriority=5 AND DMP23_15m&gt;0,"CRITICAL - DMP SIGNAL LOSS",WorstPriority=5,"CRITICAL - HOST SILENT",WorstPriority=3,"WARNING - HOST STALE",true(),"NORMAL")
+| eval Result=Health." | ".mvjoin(AffectedHosts,",")
+| fields Result</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="colorMode">block</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Today vs Exact 5-Day Same-Time Baseline</title>
+        <search base="baseline_base">
+          <query>| search host="$host_tok$"
+| stats sum(Total) as Events sum(DataPresent) as HostsWithData by Day IsToday
+| eventstats avg(eval(if(IsToday=0,Events,null()))) as FiveDayAvg sum(eval(if(IsToday=0,HostsWithData,0))) as BaselineHostDays
+| where IsToday=1
+| eval ExpectedHostDays=if("$host_tok$"="*",20,5), Percent=if(FiveDayAvg&gt;0,round(((Events-FiveDayAvg)/FiveDayAvg)*100,1),null())
+| eval Result=case(BaselineHostDays&lt;ExpectedHostDays,"BASELINE INCOMPLETE | ".BaselineHostDays."/".ExpectedHostDays." host-days",isnull(Percent),"UNKNOWN",true(),tostring(Percent)."% | Now=".Events." | Avg=".round(FiveDayAvg,0))
+| fields Result</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Worst Host: Minutes Since Last Activity</title>
+        <search base="freshness_base">
+          <query>| search host="$host_tok$" | stats max(AgeMin) as Minutes | eval Minutes=if(Minutes=999999,"NO DATA IN 24H",Minutes)</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Verified Hosts Seen in Last 24h</title>
+        <search base="freshness_base">
+          <query>| stats count(eval(isnotnull(LastSeen))) as ActiveHosts | eval Result=ActiveHosts." / 4" | fields Result</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <single>
+        <title>Combined 4-Host 5-Min Burst Status</title>
+        <search base="interval_base">
+          <query>| eventstats avg(eval(if(IsCurrent=0 AND DataPresent=1,Total,null()))) as SameSlotAvg sum(eval(if(IsCurrent=0,DataPresent,0))) as BaselineDays
+| where IsCurrent=1
+| eval PctAbove=if(SameSlotAvg&gt;0,round(((Total-SameSlotAvg)/SameSlotAvg)*100,1),null())
+| eval Status=case(BaselineDays&lt;5,"BASELINE INCOMPLETE",isnull(PctAbove),"UNKNOWN",PctAbove&gt;=$crit_pct$,"CRITICAL SPIKE",PctAbove&gt;=$warn_pct$,"WARNING SPIKE",true(),"NORMAL")
+| eval Result=Status." | ".coalesce(tostring(PctAbove),"N/A")."% | Last5m=".Total." | Avg=".round(SameSlotAvg,0)
+| fields Result</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="colorMode">block</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Last Completed 5-Min vs Same-Slot Average</title>
+        <search base="interval_base">
+          <query>| eventstats avg(eval(if(IsCurrent=0 AND DataPresent=1,Total,null()))) as SameSlotAvg | where IsCurrent=1 | eval Pct=if(SameSlotAvg&gt;0,round(((Total-SameSlotAvg)/SameSlotAvg)*100,1),null()), Result=coalesce(tostring(Pct),"N/A")."% | Now=".Total." | Avg=".round(SameSlotAvg,0) | fields Result</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Event 33-34 Gap - Last Completed 5 Min</title>
+        <search base="interval_base">
+          <query>| where IsCurrent=1 | eval Gap=E33-E34, GapPct=if(E33&gt;0,round((Gap/E33)*100,1),null()), Result="E33=".E33." | E34=".E34." | Gap=".Gap." | ".coalesce(tostring(GapPct),"N/A")."%" | fields Result</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Event 55 Type=Error - Last Completed 5 Min</title>
+        <search base="interval_base">
+          <query>| eventstats avg(eval(if(IsCurrent=0 AND DataPresent=1,E55Error,null()))) as SameSlotErrorAvg | where IsCurrent=1 | eval Result="Errors=".E55Error." | Same-slot avg=".round(SameSlotErrorAvg,1) | fields Result</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>Five-Minute Same-Slot Burst Comparison - Combined Active-Active Hosts</title>
+        <search base="interval_base">
+          <query>| eventstats avg(eval(if(IsCurrent=0 AND DataPresent=1,Total,null()))) as SameSlotAvg avg(eval(if(IsCurrent=0 AND DataPresent=1,E55Error,null()))) as Avg55Errors sum(eval(if(IsCurrent=0,DataPresent,0))) as BaselineDays
+| eval WindowStart=strftime(BucketStart,"%Y-%m-%d %H:%M:%S"), Gap33_34=E33-E34, TotalVarPct=if(SameSlotAvg&gt;0,round(((Total-SameSlotAvg)/SameSlotAvg)*100,1),null())
+| eval Status=if(IsCurrent=1,case(BaselineDays&lt;5,"BASELINE INCOMPLETE",TotalVarPct&gt;=$crit_pct$,"CRITICAL SPIKE",TotalVarPct&gt;=$warn_pct$,"WARNING SPIKE",true(),"NORMAL"),"BASELINE SLOT")
+| table WindowStart IsCurrent HostsWithData Total SameSlotAvg TotalVarPct E33 E34 Gap33_34 E55 E55Error Avg55Errors Status
+| sort - WindowStart</query>
+        </search>
+        <option name="count">10</option>
+        <option name="wrap">false</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <single>
+        <title>DMP Signal Loss - Event 23 Type 1 (15 min)</title>
+        <search base="freshness_base">
+          <query>| search host="$host_tok$" | stats sum(DMP23_15m) as LossEvents | eval Result=if(LossEvents&gt;0,"CRITICAL | ".LossEvents." DMP loss event(s)","NORMAL | 0 DMP loss events") | fields Result</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="colorMode">block</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Event 33 vs 5-Day Same-Time Avg</title>
+        <search base="baseline_base">
+          <query>| search host="$host_tok$"
+| stats sum(E33) as Events sum(DataPresent) as HostsWithData by Day IsToday
+| eventstats avg(eval(if(IsToday=0,Events,null()))) as Base sum(eval(if(IsToday=0,HostsWithData,0))) as BaselineHostDays
+| where IsToday=1
+| eval ExpectedHostDays=if("$host_tok$"="*",20,5), Pct=if(Base&gt;0,round(((Events-Base)/Base)*100,1),null())
+| eval Status=case(BaselineHostDays&lt;ExpectedHostDays,"BASELINE INCOMPLETE",isnull(Pct),"UNKNOWN",Pct&gt;=$crit_pct$,"CRITICAL",Pct&gt;=$warn_pct$,"WARNING",true(),"NORMAL")
+| eval Result=Status." | ".coalesce(tostring(Pct),"N/A")."% | Now=".Events." | Avg=".round(Base,0) | fields Result</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Event 34 vs 5-Day Same-Time Avg</title>
+        <search base="baseline_base">
+          <query>| search host="$host_tok$"
+| stats sum(E34) as Events sum(DataPresent) as HostsWithData by Day IsToday
+| eventstats avg(eval(if(IsToday=0,Events,null()))) as Base sum(eval(if(IsToday=0,HostsWithData,0))) as BaselineHostDays
+| where IsToday=1
+| eval ExpectedHostDays=if("$host_tok$"="*",20,5), Pct=if(Base&gt;0,round(((Events-Base)/Base)*100,1),null())
+| eval Status=case(BaselineHostDays&lt;ExpectedHostDays,"BASELINE INCOMPLETE",isnull(Pct),"UNKNOWN",Pct&gt;=$crit_pct$,"CRITICAL",Pct&gt;=$warn_pct$,"WARNING",true(),"NORMAL")
+| eval Result=Status." | ".coalesce(tostring(Pct),"N/A")."% | Now=".Events." | Avg=".round(Base,0) | fields Result</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Event 55 vs 5-Day Same-Time Avg</title>
+        <search base="baseline_base">
+          <query>| search host="$host_tok$"
+| stats sum(E55) as Events sum(DataPresent) as HostsWithData by Day IsToday
+| eventstats avg(eval(if(IsToday=0,Events,null()))) as Base sum(eval(if(IsToday=0,HostsWithData,0))) as BaselineHostDays
+| where IsToday=1
+| eval ExpectedHostDays=if("$host_tok$"="*",20,5), Pct=if(Base&gt;0,round(((Events-Base)/Base)*100,1),null())
+| eval Status=case(BaselineHostDays&lt;ExpectedHostDays,"BASELINE INCOMPLETE",isnull(Pct),"UNKNOWN",Pct&gt;=$crit_pct$,"CRITICAL",Pct&gt;=$warn_pct$,"WARNING",true(),"NORMAL")
+| eval Result=Status." | ".coalesce(tostring(Pct),"N/A")."% | Now=".Events." | Avg=".round(Base,0) | fields Result</query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>Today vs Previous 5 Days at the Same Time of Day</title>
+        <search base="baseline_base">
+          <query>| search host="$host_tok$"
+| stats sum(Total) as Total sum(E23) as Event23 sum(E33) as Event33 sum(E34) as Event34 sum(E55) as Event55 sum(DataPresent) as HostsWithData by Day IsToday
+| eventstats avg(eval(if(IsToday=0,Total,null()))) as AvgTotal avg(eval(if(IsToday=0,Event33,null()))) as Avg33 avg(eval(if(IsToday=0,Event34,null()))) as Avg34 avg(eval(if(IsToday=0,Event55,null()))) as Avg55
+| eval Date=strftime(Day,"%Y-%m-%d"), TotalVarPct=if(AvgTotal&gt;0,round(((Total-AvgTotal)/AvgTotal)*100,1),null()), E33VarPct=if(Avg33&gt;0,round(((Event33-Avg33)/Avg33)*100,1),null()), E34VarPct=if(Avg34&gt;0,round(((Event34-Avg34)/Avg34)*100,1),null()), E55VarPct=if(Avg55&gt;0,round(((Event55-Avg55)/Avg55)*100,1),null())
+| eval ExpectedHosts=if("$host_tok$"="*",4,1), Status=if(IsToday=1,case(HostsWithData&lt;ExpectedHosts,"CRITICAL - HOST DATA MISSING",Event23&gt;0,"CRITICAL - DMP SIGNAL LOSS",TotalVarPct&gt;=$crit_pct$ OR E55VarPct&gt;=$crit_pct$,"CRITICAL",TotalVarPct&gt;=$warn_pct$ OR E55VarPct&gt;=$warn_pct$,"WARNING",true(),"NORMAL"),"BASELINE DAY")
+| table Date IsToday HostsWithData Total AvgTotal TotalVarPct Event23 Event33 Avg33 E33VarPct Event34 Avg34 E34VarPct Event55 Avg55 E55VarPct Status
+| sort - Date</query>
+        </search>
+        <option name="count">10</option>
+        <option name="wrap">false</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <chart>
+        <title>Received (33) vs Sent (34) - Diagnostic Trend</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" (EventCode=33 OR EventCode=34)
+| eval host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| search host="$host_tok$"
+| eval Flow=case(EventCode=33,"Event 33",EventCode=34,"Event 34")
+| timechart span=5m count by Flow</query>
+          <earliest>$diag_time.earliest$</earliest>
+          <latest>$diag_time.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <chart>
+        <title>Event 55 Trend - Review / Error Candidate</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" EventCode=55
+| eval host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| search host="$host_tok$"
+| timechart span=5m count as Event55</query>
+          <earliest>$diag_time.earliest$</earliest>
+          <latest>$diag_time.latest$</latest>
+        </search>
+        <option name="charting.chart">column</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <chart>
+        <title>DMP Signal Loss Event 23 Type 1 Trend</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" EventCode=23 Type=1
+| eval host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| search host="$host_tok$"
+| timechart span=5m count as DMP_Loss_Events</query>
+          <earliest>$diag_time.earliest$</earliest>
+          <latest>$diag_time.latest$</latest>
+        </search>
+        <option name="charting.chart">column</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>Enterprise Host Health Matrix - Silent Hosts Are Retained</title>
+        <search base="freshness_base">
+          <query>| search host="$host_tok$"
+| eval Health=case(DMP23_15m&gt;0,"CRITICAL - DMP SIGNAL LOSS",isnull(LastSeen),"CRITICAL - NO DATA IN 24H",AgeMin&gt;=$fresh_crit$,"CRITICAL - NO ACTIVITY",AgeMin&gt;=$fresh_warn$,"WARNING - STALE",true(),"ACTIVE")
+| table host Health AgeMin Total24h DMP23_15m LastSeenText
+| sort host</query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>Baseline Alert Candidates - Rows Only When Attention Is Required</title>
+        <search base="baseline_base">
+          <query>| search host="$host_tok$"
+| eventstats avg(eval(if(IsToday=0,Total,null()))) as AvgTotal avg(eval(if(IsToday=0,E55,null()))) as Avg55 sum(eval(if(IsToday=0,DataPresent,0))) as BaselineDaysWithData by host
+| where IsToday=1
+| eval TotalVarPct=if(AvgTotal&gt;0,round(((Total-AvgTotal)/AvgTotal)*100,1),null()), E55VarPct=if(Avg55&gt;0,round(((E55-Avg55)/Avg55)*100,1),null())
+| eval Trigger=case(E23&gt;0,"CRITICAL: DMP SIGNAL LOSS EVENT 23",BaselineDaysWithData&lt;5,"WARNING: FIVE-DAY BASELINE INCOMPLETE",TotalVarPct&gt;=$crit_pct$,"CRITICAL: TOTAL VOLUME ABOVE BASELINE",E55VarPct&gt;=$crit_pct$,"CRITICAL: EVENT 55 ABOVE BASELINE",TotalVarPct&lt;=-$crit_pct$,"CRITICAL: TOTAL VOLUME BELOW BASELINE",TotalVarPct&gt;=$warn_pct$,"WARNING: TOTAL VOLUME ABOVE BASELINE",E55VarPct&gt;=$warn_pct$,"WARNING: EVENT 55 ABOVE BASELINE",TotalVarPct&lt;=-$warn_pct$,"WARNING: TOTAL VOLUME BELOW BASELINE",true(),null())
+| where isnotnull(Trigger)
+| eval LastSeenText=if(isnull(LastSeen),"NO EVENTS TODAY",strftime(LastSeen,"%Y-%m-%d %H:%M:%S"))
+| table host Trigger Total AvgTotal TotalVarPct E23 E33 E34 E55 Avg55 E55VarPct BaselineDaysWithData LastSeenText
+| sort Trigger host</query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>DMP Signal Loss Details - Event 23 Type 1</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" EventCode=23 Type=1
+| eval RawHost=host, host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| search host="$host_tok$"
+| eval EventTime=strftime(_time,"%Y-%m-%d %H:%M:%S")
+| table EventTime host RawHost EventCode Type Message
+| sort - EventTime</query>
+          <earliest>$diag_time.earliest$</earliest>
+          <latest>$diag_time.latest$</latest>
+        </search>
+        <option name="count">25</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+
+    <panel>
+      <table>
+        <title>CloudLink Suspicious / Error-Like Messages</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client"
+| eval host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| search host="$host_tok$"
+| search (EventCode=55 OR Message="*invalid_signal*" OR Message="*Failed to decode signal*" OR Message="*Timeout*" OR Message="*exception*" OR Message="*failed*" OR Message="*error*")
+| eval EventTime=strftime(_time,"%Y-%m-%d %H:%M:%S")
+| table EventTime host EventCode Type Message
+| sort - EventTime</query>
+          <earliest>$diag_time.earliest$</earliest>
+          <latest>$diag_time.latest$</latest>
+        </search>
+        <option name="count">25</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>CloudLink Host Discovery - Compare Raw and Normalized Hostnames</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client"
+| eval RawHost=host, NormalizedHost=upper(mvindex(split(host,"."),0))
+| stats count as Events latest(_time) as LastSeen by RawHost NormalizedHost
+| eval Verified=if(in(NormalizedHost,"GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002"),"YES","NO"), LastSeen=strftime(LastSeen,"%Y-%m-%d %H:%M:%S")
+| table RawHost NormalizedHost Verified Events LastSeen
+| sort - Events</query>
+          <earliest>-24h</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="count">50</option>
+        <option name="wrap">false</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>Raw CloudLink Diagnostics</title>
+        <search>
+          <query>index=winos source="WinEventLog:Application" SourceName="CloudLink.Client"
+| eval RawHost=host, host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| search host="$host_tok$"
+| eval EventTime=strftime(_time,"%Y-%m-%d %H:%M:%S")
+| eval Meaning=case(EventCode=23 AND Type=1,"DMP Signal Loss",EventCode=33,"Observed Event 33",EventCode=34,"Observed Event 34",EventCode=41,"Tunnel Candidate 41",EventCode=48,"Tunnel Candidate 48",EventCode=49,"Tunnel Candidate 49",EventCode=55,"Review Event 55",true(),"Other")
+| table EventTime host RawHost EventCode Meaning Type Message
+| sort - EventTime</query>
+          <earliest>$diag_time.earliest$</earliest>
+          <latest>$diag_time.latest$</latest>
+        </search>
+        <option name="count">50</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <html>
+        <h2>Enterprise Monitoring Notes - v5.2 BURST-DETECTOR-20260815</h2>
+        <p><b>Corrected baseline:</b> The Today field is recreated after aggregation, and the shared baseline always includes four hosts across today plus the previous five calendar days at the same time of day.</p>
+        <p><b>Host safety:</b> Hostnames are normalized to uppercase short names. All operational searches remain restricted to the four verified hosts. The discovery table shows the original indexed host value for comparison.</p>
+        <p><b>No-data safety:</b> All four hosts are seeded before freshness calculation. A silent host remains visible and can make overall health critical.</p>
+        <p><b>DMP monitoring:</b> EventCode 23 with Type 1 is treated as the confirmed DMP signal-loss condition and receives its own health card, trend, detail table, and alert search.</p>
+        <p><b>Five-minute burst monitoring:</b> The last fully completed five-minute interval is compared with the identical time slot from each of the previous five days. Counts are combined across all four active-active hosts so normal traffic redistribution does not create host-level false positives.</p>
+        <p><b>Delay interpretation:</b> A burst can indicate backlog release, replay, retry, or connectivity recovery, but it does not by itself prove queue delay. True oldest-pending age and end-to-end delay require the Phase 2 DB queue fields or a confirmed signal correlation identifier.</p>
+        <p><b>Provisional semantics:</b> Events 33, 34, and 55 remain observed diagnostic event IDs until their exact vendor meanings are formally validated. The 33/34 count difference is not treated as queue depth.</p>
+        <p><b>Phase 2 - DB queue:</b> Queue depth, oldest pending signal, enqueue/drain rates, last processed signal, and sustained non-draining detection will be added after the production queue schema is confirmed.</p>
+      </html>
+    </panel>
+  </row>
+</form>
