@@ -1,0 +1,261 @@
+PSIMS / SUREVIEW ENTERPRISE ALERT SEARCHES - V5.2 BURST-DETECTOR-20260815
+=========================================================================
+
+Verified data source:
+  index=winos
+  source="WinEventLog:Application"
+  SourceName="CloudLink.Client"
+
+Verified normalized hosts:
+  GPVWA00A0001, GPVWA00A0002, GRVWA00A0001, GRVWA00A0002
+
+V5.2 ADDITIONS AND CORRECTIONS
+------------------------------
+- Adds a production-candidate combined four-host five-minute burst alert.
+- Compares the last completed five-minute interval with the identical time slot on the previous five days.
+- Uses combined active-active volume to avoid false alerts from traffic redistribution between hosts.
+- Counts Event 55 Type=Error separately from informational Event 55 records.
+- Corrected verified hostnames to GPVWA/GRVWA (the earlier WMA values were wrong).
+- Recreates Today after stats so Day=Today comparisons work.
+- Seeds four hosts across today plus five baseline days.
+- Requires all five baseline days to contain data before volume alerts fire.
+- Normalizes FQDN/lowercase host values to uppercase short hostnames.
+- Adds confirmed DMP signal-loss monitoring: EventCode=23 Type=1.
+- Adds both warning and critical no-activity searches.
+
+IMPORTANT
+---------
+Each search returns rows only when attention is required.
+Configure the Splunk trigger as: Number of Results > 0.
+Use the listed host field for per-host throttling.
+Events 33, 34, and 55 remain provisional diagnostic IDs until vendor/raw-message validation.
+Per-host volume searches 4-7 are diagnostic/tuning searches in this active-active environment.
+Use search 10 as the production candidate for short-window combined-volume spikes.
+
+
+1) CRITICAL - DMP SIGNAL LOSS EVENT 23 TYPE 1
+Recommended schedule: every 5 minutes
+Recommended throttle: 15 minutes by host
+------------------------------------------------
+index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" EventCode=23 Type=1 earliest=-5m latest=now
+| eval RawHost=host, host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| stats count as DMP_Loss_Events latest(_time) as LastSeen values(Message) as SampleMessages by host RawHost
+| where DMP_Loss_Events>0
+| eval Severity="CRITICAL", Reason="Confirmed DMP signal-loss event detected", LastSeen=strftime(LastSeen,"%Y-%m-%d %H:%M:%S")
+| table host RawHost Severity Reason DMP_Loss_Events LastSeen SampleMessages
+
+
+2) CRITICAL - VERIFIED CLOUDLINK HOST HAS NO ACTIVITY FOR 10 MINUTES
+Recommended schedule: every 5 minutes
+Recommended throttle: 30 minutes by host
+--------------------------------------------------------------------------
+| makeresults count=4
+| streamstats count as n
+| eval host=case(n=1,"GPVWA00A0001",n=2,"GPVWA00A0002",n=3,"GRVWA00A0001",true(),"GRVWA00A0002")
+| fields host
+| append [ search index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-24h latest=now
+    | eval host=upper(mvindex(split(host,"."),0))
+    | search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+    | stats latest(_time) as LastSeen by host ]
+| stats max(LastSeen) as LastSeen by host
+| eval AgeMin=if(isnull(LastSeen),999999,round((now()-LastSeen)/60,1))
+| where AgeMin>=10
+| eval Severity="CRITICAL", Reason="No CloudLink.Client activity for 10 minutes or longer", LastSeenText=if(isnull(LastSeen),"NO DATA IN 24H",strftime(LastSeen,"%Y-%m-%d %H:%M:%S"))
+| table host Severity Reason AgeMin LastSeenText
+
+
+3) WARNING - VERIFIED CLOUDLINK HOST STALE FOR 5 TO LESS THAN 10 MINUTES
+Recommended schedule: every 5 minutes
+Recommended throttle: 15 minutes by host
+----------------------------------------------------------------------------
+| makeresults count=4
+| streamstats count as n
+| eval host=case(n=1,"GPVWA00A0001",n=2,"GPVWA00A0002",n=3,"GRVWA00A0001",true(),"GRVWA00A0002")
+| fields host
+| append [ search index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-24h latest=now
+    | eval host=upper(mvindex(split(host,"."),0))
+    | search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+    | stats latest(_time) as LastSeen by host ]
+| stats max(LastSeen) as LastSeen by host
+| eval AgeMin=if(isnull(LastSeen),999999,round((now()-LastSeen)/60,1))
+| where AgeMin>=5 AND AgeMin<10
+| eval Severity="WARNING", Reason="CloudLink.Client activity is stale for 5 to less than 10 minutes", LastSeenText=strftime(LastSeen,"%Y-%m-%d %H:%M:%S")
+| table host Severity Reason AgeMin LastSeenText
+
+
+4) CRITICAL - TOTAL CLOUDLINK VOLUME >=40% ABOVE EXACT FIVE-DAY SAME-TIME BASELINE
+Recommended schedule: every 15 minutes
+Recommended throttle: 60 minutes by host
+-------------------------------------------------------------------------------------
+index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-5d@d latest=now
+| eval host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| eval InSameTime=if(Day=Today OR SecIntoDay<=Cutoff,1,0)
+| stats count(eval(InSameTime=1)) as Total max(eval(if(InSameTime=1,_time,null()))) as LastSeen count as FullDayEvents by host Day
+| eval DataPresent=if(FullDayEvents>0,1,0)
+| append [ | makeresults count=24
+    | streamstats count as n
+    | eval host=case(n<=6,"GPVWA00A0001",n<=12,"GPVWA00A0002",n<=18,"GRVWA00A0001",true(),"GRVWA00A0002"), Offset=(n-1)%6
+    | eval Day=case(Offset=0,relative_time(now(),"@d"),Offset=1,relative_time(now(),"-1d@d"),Offset=2,relative_time(now(),"-2d@d"),Offset=3,relative_time(now(),"-3d@d"),Offset=4,relative_time(now(),"-4d@d"),true(),relative_time(now(),"-5d@d")), Total=0, DataPresent=0
+    | fields host Day Total DataPresent ]
+| stats sum(Total) as Total max(LastSeen) as LastSeen max(DataPresent) as DataPresent by host Day
+| eval Today=relative_time(now(),"@d")
+| eventstats avg(eval(if(Day<Today,Total,null()))) as FiveDayAvg sum(eval(if(Day<Today,DataPresent,0))) as BaselineDaysWithData by host
+| where Day=Today AND BaselineDaysWithData=5
+| eval PercentAbove=if(FiveDayAvg>0,round(((Total-FiveDayAvg)/FiveDayAvg)*100,1),null())
+| where PercentAbove>=40
+| eval Severity="CRITICAL", Reason="CloudLink volume is at least 40% above the exact five-day same-time baseline", LastSeenText=if(isnull(LastSeen),"NO EVENTS TODAY",strftime(LastSeen,"%Y-%m-%d %H:%M:%S"))
+| table host Severity Reason Total FiveDayAvg PercentAbove BaselineDaysWithData LastSeenText
+
+
+5) WARNING - TOTAL CLOUDLINK VOLUME >=20% AND <40% ABOVE EXACT BASELINE
+Recommended schedule: every 15 minutes
+Recommended throttle: 60 minutes by host
+----------------------------------------------------------------------------
+index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-5d@d latest=now
+| eval host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| eval InSameTime=if(Day=Today OR SecIntoDay<=Cutoff,1,0)
+| stats count(eval(InSameTime=1)) as Total max(eval(if(InSameTime=1,_time,null()))) as LastSeen count as FullDayEvents by host Day
+| eval DataPresent=if(FullDayEvents>0,1,0)
+| append [ | makeresults count=24
+    | streamstats count as n
+    | eval host=case(n<=6,"GPVWA00A0001",n<=12,"GPVWA00A0002",n<=18,"GRVWA00A0001",true(),"GRVWA00A0002"), Offset=(n-1)%6
+    | eval Day=case(Offset=0,relative_time(now(),"@d"),Offset=1,relative_time(now(),"-1d@d"),Offset=2,relative_time(now(),"-2d@d"),Offset=3,relative_time(now(),"-3d@d"),Offset=4,relative_time(now(),"-4d@d"),true(),relative_time(now(),"-5d@d")), Total=0, DataPresent=0
+    | fields host Day Total DataPresent ]
+| stats sum(Total) as Total max(LastSeen) as LastSeen max(DataPresent) as DataPresent by host Day
+| eval Today=relative_time(now(),"@d")
+| eventstats avg(eval(if(Day<Today,Total,null()))) as FiveDayAvg sum(eval(if(Day<Today,DataPresent,0))) as BaselineDaysWithData by host
+| where Day=Today AND BaselineDaysWithData=5
+| eval PercentAbove=if(FiveDayAvg>0,round(((Total-FiveDayAvg)/FiveDayAvg)*100,1),null())
+| where PercentAbove>=20 AND PercentAbove<40
+| eval Severity="WARNING", Reason="CloudLink volume is 20% to less than 40% above the exact five-day same-time baseline", LastSeenText=if(isnull(LastSeen),"NO EVENTS TODAY",strftime(LastSeen,"%Y-%m-%d %H:%M:%S"))
+| table host Severity Reason Total FiveDayAvg PercentAbove BaselineDaysWithData LastSeenText
+
+
+6) CRITICAL - EVENT 55 >=40% ABOVE EXACT FIVE-DAY SAME-TIME BASELINE
+Recommended schedule: every 15 minutes
+Recommended throttle: 60 minutes by host
+----------------------------------------------------------------------------
+index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-5d@d latest=now
+| eval host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| eval InSameTime=if(Day=Today OR SecIntoDay<=Cutoff,1,0)
+| stats count(eval(InSameTime=1 AND EventCode=55)) as Event55 max(eval(if(InSameTime=1 AND EventCode=55,_time,null()))) as LastSeen count as FullDayEvents by host Day
+| eval DataPresent=if(FullDayEvents>0,1,0)
+| append [ | makeresults count=24
+    | streamstats count as n
+    | eval host=case(n<=6,"GPVWA00A0001",n<=12,"GPVWA00A0002",n<=18,"GRVWA00A0001",true(),"GRVWA00A0002"), Offset=(n-1)%6
+    | eval Day=case(Offset=0,relative_time(now(),"@d"),Offset=1,relative_time(now(),"-1d@d"),Offset=2,relative_time(now(),"-2d@d"),Offset=3,relative_time(now(),"-3d@d"),Offset=4,relative_time(now(),"-4d@d"),true(),relative_time(now(),"-5d@d")), Event55=0, DataPresent=0
+    | fields host Day Event55 DataPresent ]
+| stats sum(Event55) as Event55 max(LastSeen) as LastSeen max(DataPresent) as DataPresent by host Day
+| eval Today=relative_time(now(),"@d")
+| eventstats avg(eval(if(Day<Today,Event55,null()))) as FiveDayAvg sum(eval(if(Day<Today,DataPresent,0))) as BaselineDaysWithData by host
+| where Day=Today AND BaselineDaysWithData=5
+| eval PercentAbove=if(FiveDayAvg>0,round(((Event55-FiveDayAvg)/FiveDayAvg)*100,1),null())
+| where PercentAbove>=40
+| eval Severity="CRITICAL", Reason="Event 55 is at least 40% above the exact five-day same-time baseline", LastSeenText=if(isnull(LastSeen),"NO EVENT 55 TODAY",strftime(LastSeen,"%Y-%m-%d %H:%M:%S"))
+| table host Severity Reason Event55 FiveDayAvg PercentAbove BaselineDaysWithData LastSeenText
+
+
+7) WARNING - EVENT 55 >=20% AND <40% ABOVE EXACT BASELINE
+Recommended schedule: every 15 minutes
+Recommended throttle: 60 minutes by host
+--------------------------------------------------------------------
+index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-5d@d latest=now
+| eval host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| eval InSameTime=if(Day=Today OR SecIntoDay<=Cutoff,1,0)
+| stats count(eval(InSameTime=1 AND EventCode=55)) as Event55 max(eval(if(InSameTime=1 AND EventCode=55,_time,null()))) as LastSeen count as FullDayEvents by host Day
+| eval DataPresent=if(FullDayEvents>0,1,0)
+| append [ | makeresults count=24
+    | streamstats count as n
+    | eval host=case(n<=6,"GPVWA00A0001",n<=12,"GPVWA00A0002",n<=18,"GRVWA00A0001",true(),"GRVWA00A0002"), Offset=(n-1)%6
+    | eval Day=case(Offset=0,relative_time(now(),"@d"),Offset=1,relative_time(now(),"-1d@d"),Offset=2,relative_time(now(),"-2d@d"),Offset=3,relative_time(now(),"-3d@d"),Offset=4,relative_time(now(),"-4d@d"),true(),relative_time(now(),"-5d@d")), Event55=0, DataPresent=0
+    | fields host Day Event55 DataPresent ]
+| stats sum(Event55) as Event55 max(LastSeen) as LastSeen max(DataPresent) as DataPresent by host Day
+| eval Today=relative_time(now(),"@d")
+| eventstats avg(eval(if(Day<Today,Event55,null()))) as FiveDayAvg sum(eval(if(Day<Today,DataPresent,0))) as BaselineDaysWithData by host
+| where Day=Today AND BaselineDaysWithData=5
+| eval PercentAbove=if(FiveDayAvg>0,round(((Event55-FiveDayAvg)/FiveDayAvg)*100,1),null())
+| where PercentAbove>=20 AND PercentAbove<40
+| eval Severity="WARNING", Reason="Event 55 is 20% to less than 40% above the exact five-day same-time baseline", LastSeenText=if(isnull(LastSeen),"NO EVENT 55 TODAY",strftime(LastSeen,"%Y-%m-%d %H:%M:%S"))
+| table host Severity Reason Event55 FiveDayAvg PercentAbove BaselineDaysWithData LastSeenText
+
+
+8) WARNING - CLOUDLINK ERROR-LIKE MESSAGE BURST
+Recommended schedule: every 5 minutes
+Initial threshold: 10 events in 5 minutes; tune after observation
+Recommended throttle: 15 minutes by host
+-----------------------------------------------------------
+index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-5m latest=now
+| eval host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| search (Message="*invalid_signal*" OR Message="*Failed to decode signal*" OR Message="*Timeout*" OR Message="*exception*" OR Message="*failed*" OR Message="*error*")
+| stats count as ErrorLikeEvents latest(_time) as LastSeen values(EventCode) as EventCodes values(Message) as SampleMessages by host
+| where ErrorLikeEvents>=10
+| eval Severity="WARNING", Reason="Error-like CloudLink message burst", LastSeen=strftime(LastSeen,"%Y-%m-%d %H:%M:%S")
+| table host Severity Reason ErrorLikeEvents EventCodes LastSeen SampleMessages
+
+
+9) WARNING - FIVE-DAY BASELINE IS INCOMPLETE
+Recommended schedule: once daily after the normal signal flow begins
+Recommended throttle: 24 hours by host
+------------------------------------------------------------
+index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-5d@d latest=@d
+| eval host=upper(mvindex(split(host,"."),0)), Day=relative_time(_time,"@d")
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| stats count as Events by host Day
+| eval DataPresent=1
+| append [ | makeresults count=20
+    | streamstats count as n
+    | eval host=case(n<=5,"GPVWA00A0001",n<=10,"GPVWA00A0002",n<=15,"GRVWA00A0001",true(),"GRVWA00A0002"), Offset=((n-1)%5)+1
+    | eval Day=case(Offset=1,relative_time(now(),"-1d@d"),Offset=2,relative_time(now(),"-2d@d"),Offset=3,relative_time(now(),"-3d@d"),Offset=4,relative_time(now(),"-4d@d"),true(),relative_time(now(),"-5d@d")), Events=0, DataPresent=0
+    | fields host Day Events DataPresent ]
+| stats sum(Events) as Events max(DataPresent) as DataPresent by host Day
+| stats sum(DataPresent) as BaselineDaysWithData values(eval(if(DataPresent=0,strftime(Day,"%Y-%m-%d"),null()))) as MissingDays by host
+| where BaselineDaysWithData<5
+| eval Severity="WARNING", Reason="Exact five-day same-time baseline is incomplete"
+| table host Severity Reason BaselineDaysWithData MissingDays
+
+10) WARNING/CRITICAL - COMBINED FOUR-HOST FIVE-MINUTE VOLUME SPIKE
+Recommended schedule: every 5 minutes
+Recommended throttle: 15 minutes
+Trigger: Number of Results > 0
+Scope: combined active-active hosts, not per host
+------------------------------------------------------------------
+index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-6d@d latest=now
+| eval host=upper(mvindex(split(host,"."),0))
+| search host IN ("GPVWA00A0001","GPVWA00A0002","GRVWA00A0001","GRVWA00A0002")
+| eval BucketStart=floor(_time/300)*300, CurrentBucket=floor(now()/300)*300-300, CurrentDay=relative_time(CurrentBucket,"@d"), Day=relative_time(BucketStart,"@d"), Slot=BucketStart-Day, CurrentSlot=CurrentBucket-CurrentDay
+| where BucketStart=CurrentBucket OR (Day>=relative_time(CurrentDay,"-5d@d") AND Day<CurrentDay AND Slot=CurrentSlot)
+| stats count as Total count(eval(EventCode=33)) as E33 count(eval(EventCode=34)) as E34 count(eval(EventCode=55 AND Type="Error")) as E55Error dc(host) as HostsWithData by BucketStart
+| eval DataPresent=1
+| append [ | makeresults count=6
+    | streamstats count as n
+    | eval Offset=n-1, CurrentBucket=floor(now()/300)*300-300
+    | eval BucketStart=case(Offset=0,CurrentBucket,Offset=1,relative_time(CurrentBucket,"-1d"),Offset=2,relative_time(CurrentBucket,"-2d"),Offset=3,relative_time(CurrentBucket,"-3d"),Offset=4,relative_time(CurrentBucket,"-4d"),true(),relative_time(CurrentBucket,"-5d")), Total=0, E33=0, E34=0, E55Error=0, HostsWithData=0, DataPresent=0
+    | fields BucketStart Total E33 E34 E55Error HostsWithData DataPresent ]
+| stats sum(Total) as Total sum(E33) as E33 sum(E34) as E34 sum(E55Error) as E55Error max(HostsWithData) as HostsWithData max(DataPresent) as DataPresent by BucketStart
+| eval CurrentBucket=floor(now()/300)*300-300, IsCurrent=if(BucketStart=CurrentBucket,1,0)
+| eventstats avg(eval(if(IsCurrent=0,Total,null()))) as SameSlotAvg stdev(eval(if(IsCurrent=0,Total,null()))) as SameSlotStdev sum(eval(if(IsCurrent=0,DataPresent,0))) as BaselineDays
+| where IsCurrent=1 AND BaselineDays=5 AND SameSlotAvg>=20
+| eval PercentAbove=round(((Total-SameSlotAvg)/SameSlotAvg)*100,1), Gap33_34=E33-E34
+| where PercentAbove>=20
+| eval Severity=if(PercentAbove>=40,"CRITICAL","WARNING"), Reason="Combined CloudLink five-minute volume is above the previous five-day same-slot baseline", WindowStart=strftime(BucketStart,"%Y-%m-%d %H:%M:%S"), Scope="GPVWA00A0001,GPVWA00A0002,GRVWA00A0001,GRVWA00A0002"
+| table Severity Reason WindowStart Scope Total SameSlotAvg SameSlotStdev PercentAbove HostsWithData E33 E34 Gap33_34 E55Error BaselineDays
+
+
+PHASE 2 - DB QUEUE ALERTS AFTER SCHEMA CONFIRMATION
+----------------------------------------------------
+- Queue depth above dynamic baseline
+- Oldest pending signal age threshold
+- Queue not draining for N minutes
+- Enqueue rate greater than drain rate for a sustained period
+- Last successfully processed signal age
+- Queue anomaly correlated with CloudLink activity and Event 23
