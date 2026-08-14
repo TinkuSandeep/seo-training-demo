@@ -1,0 +1,294 @@
+<form version="1.1" theme="dark">
+  <label>PSIMS / SureView Signal Flow Health - v1</label>
+  <description>Starter dashboard for monitoring PSIMS/SureView signal flow, OpsLink health, queue aging, processing rate, and recent integration errors. Queue field names are placeholders until DB schema is confirmed.</description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="time" token="time_tok">
+      <label>Time Range</label>
+      <default>
+        <earliest>-4h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+
+    <input type="text" token="idx_tok">
+      <label>Splunk Index</label>
+      <default>psims</default>
+    </input>
+
+    <input type="dropdown" token="env_tok">
+      <label>Environment</label>
+      <choice value="*">All</choice>
+      <choice value="PROD">PROD</choice>
+      <choice value="BCP">BCP</choice>
+      <choice value="DEV">DEV</choice>
+      <choice value="UAT">UAT</choice>
+      <default>*</default>
+    </input>
+
+    <input type="text" token="age_warn_tok">
+      <label>Oldest Signal Warning (min)</label>
+      <default>5</default>
+    </input>
+
+    <input type="text" token="age_crit_tok">
+      <label>Oldest Signal Critical (min)</label>
+      <default>10</default>
+    </input>
+
+    <input type="text" token="queue_warn_tok">
+      <label>Queue Warning Count</label>
+      <default>50</default>
+    </input>
+
+    <input type="text" token="queue_crit_tok">
+      <label>Queue Critical Count</label>
+      <default>100</default>
+    </input>
+  </fieldset>
+
+  <!--
+    EXPECTED NORMALIZED FIELDS (TEMPORARY PLACEHOLDERS)
+      signal_id       : unique signal/event identifier
+      status          : QUEUED / PROCESSED / FAILED
+      created_time    : timestamp signal entered queue
+      processed_time  : timestamp signal completed / left queue
+      event_type      : CREATED / PROCESSED / FAILED (optional)
+      environment     : PROD / BCP / DEV / UAT
+      component       : OpsLink / CloudLink / SureView Device / PSIMS
+      service_name    : Windows service name
+      message         : raw event/log message
+
+    Replace sourcetypes and field names after DB schema / Splunk ingestion details are confirmed.
+  -->
+
+  <row>
+    <panel>
+      <single>
+        <title>Overall Signal Flow</title>
+        <search>
+          <query>index=$idx_tok$ environment=$env_tok$ sourcetype="psims:signal_queue"
+| eval created_epoch=coalesce(strptime(created_time,"%Y-%m-%d %H:%M:%S"),_time)
+| eval age_min=if(status="QUEUED",(now()-created_epoch)/60,null())
+| stats count(eval(status="QUEUED")) as queue_depth max(age_min) as oldest_signal_min latest(eval(if(status="PROCESSED",_time,null()))) as last_processed_epoch
+| eval minutes_since_processed=round((now()-last_processed_epoch)/60,1)
+| eval health=case(queue_depth&gt;=$queue_crit_tok$ AND oldest_signal_min&gt;=$age_crit_tok$,"CRITICAL", oldest_signal_min&gt;=$age_crit_tok$,"RED", queue_depth&gt;=$queue_warn_tok$ OR oldest_signal_min&gt;=$age_warn_tok$,"AMBER", true(),"GREEN")
+| fields health</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="drilldown">none</option>
+        <option name="rangeColors">["0x65a637","0xf7bc38","0xd93f3c"]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Current Queue Depth</title>
+        <search>
+          <query>index=$idx_tok$ environment=$env_tok$ sourcetype="psims:signal_queue" status="QUEUED"
+| stats count as queue_depth</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="colorMode">value</option>
+        <option name="rangeValues">[$queue_warn_tok$,$queue_crit_tok$]</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Oldest Pending Signal (min)</title>
+        <search>
+          <query>index=$idx_tok$ environment=$env_tok$ sourcetype="psims:signal_queue" status="QUEUED"
+| eval created_epoch=coalesce(strptime(created_time,"%Y-%m-%d %H:%M:%S"),_time)
+| eval age_min=round((now()-created_epoch)/60,1)
+| stats max(age_min) as oldest_signal_min</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="colorMode">value</option>
+        <option name="rangeValues">[$age_warn_tok$,$age_crit_tok$]</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>Minutes Since Last Processed Signal</title>
+        <search>
+          <query>index=$idx_tok$ environment=$env_tok$ sourcetype="psims:signal_queue" status="PROCESSED"
+| stats latest(_time) as last_processed_epoch
+| eval minutes_since=round((now()-last_processed_epoch)/60,1)
+| fields minutes_since</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="colorMode">value</option>
+        <option name="rangeValues">[$age_warn_tok$,$age_crit_tok$]</option>
+      </single>
+    </panel>
+
+    <panel>
+      <single>
+        <title>OpsLink / CloudLink Errors</title>
+        <search>
+          <query>index=$idx_tok$ environment=$env_tok$ (sourcetype="WinEventLog:Application" OR sourcetype="opslink:log" OR sourcetype="cloudlink:log")
+("OpsLink" OR "CloudLink" OR "SureView Device" OR "SureView")
+(error OR failed OR failure OR exception OR disconnected OR offline OR timeout)
+| stats count as errors</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <chart>
+        <title>Queue Depth Trend</title>
+        <search>
+          <query>index=$idx_tok$ environment=$env_tok$ sourcetype="psims:signal_queue"
+| timechart span=5m count(eval(status="QUEUED")) as Queued</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <chart>
+        <title>Incoming vs Processed Signals</title>
+        <search>
+          <query>index=$idx_tok$ environment=$env_tok$ sourcetype="psims:signal_queue"
+| eval Incoming=if(event_type="CREATED" OR status="QUEUED",1,0)
+| eval Processed=if(event_type="PROCESSED" OR status="PROCESSED",1,0)
+| timechart span=5m sum(Incoming) as Incoming sum(Processed) as Processed</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <chart>
+        <title>Queue State - Draining / Stalled / Growing</title>
+        <search>
+          <query>index=$idx_tok$ environment=$env_tok$ sourcetype="psims:signal_queue"
+| timechart span=5m count(eval(status="QUEUED")) as queue_count
+| streamstats current=f window=1 last(queue_count) as previous_count
+| eval delta=queue_count-previous_count
+| eval state=case(queue_count=0,"HEALTHY", delta&lt;0,"DRAINING", delta=0,"STALLED", delta&gt;0,"GROWING")
+| eval stalled=if(state="STALLED",queue_count,null()), growing=if(state="GROWING",queue_count,null()), draining=if(state="DRAINING",queue_count,null())
+| fields _time stalled growing draining</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <chart>
+        <title>Oldest Pending Signal Age Trend</title>
+        <search>
+          <query>index=$idx_tok$ environment=$env_tok$ sourcetype="psims:signal_queue" status="QUEUED"
+| eval created_epoch=coalesce(strptime(created_time,"%Y-%m-%d %H:%M:%S"),_time)
+| eval age_min=(now()-created_epoch)/60
+| timechart span=5m max(age_min) as Oldest_Signal_Minutes</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>Stalled / Aged Signals</title>
+        <search>
+          <query>index=$idx_tok$ environment=$env_tok$ sourcetype="psims:signal_queue" status="QUEUED"
+| eval created_epoch=coalesce(strptime(created_time,"%Y-%m-%d %H:%M:%S"),_time)
+| eval age_min=round((now()-created_epoch)/60,1)
+| where age_min&gt;=$age_warn_tok$
+| sort - age_min
+| table signal_id created_time age_min status source queue_name component message</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="count">20</option>
+        <option name="drilldown">row</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <chart>
+        <title>OpsLink / CloudLink Error Trend</title>
+        <search>
+          <query>index=$idx_tok$ environment=$env_tok$ (sourcetype="WinEventLog:Application" OR sourcetype="opslink:log" OR sourcetype="cloudlink:log")
+("OpsLink" OR "CloudLink" OR "SureView Device" OR "SureView")
+| eval severity=case(match(lower(_raw),"error|failed|failure|exception|offline|timeout"),"ERROR",match(lower(_raw),"disconnect|retry|warning|warn"),"WARNING",true(),"INFO")
+| timechart span=5m count by severity</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <table>
+        <title>Recent OpsLink / SureView Integration Errors</title>
+        <search>
+          <query>index=$idx_tok$ environment=$env_tok$ (sourcetype="WinEventLog:Application" OR sourcetype="opslink:log" OR sourcetype="cloudlink:log")
+("OpsLink" OR "CloudLink" OR "SureView Device" OR "SureView")
+(error OR failed OR failure OR exception OR disconnected OR offline OR timeout OR retry)
+| eval Time=strftime(_time,"%Y-%m-%d %H:%M:%S")
+| table Time host source sourcetype component service_name message _raw
+| sort - Time</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="count">20</option>
+        <option name="drilldown">row</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <table>
+        <title>Data Readiness / Field Coverage</title>
+        <search>
+          <query>index=$idx_tok$ environment=$env_tok$
+| stats count as events count(signal_id) as signal_id count(status) as status count(created_time) as created_time count(processed_time) as processed_time count(event_type) as event_type count(component) as component count(service_name) as service_name count(message) as message by sourcetype
+| sort - events</query>
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+        </search>
+        <option name="count">20</option>
+        <option name="drilldown">none</option>
+      </table>
+    </panel>
+  </row>
+</form>
