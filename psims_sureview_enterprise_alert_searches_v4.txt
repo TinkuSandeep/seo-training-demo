@@ -1,0 +1,106 @@
+PSIMS / SUREVIEW ENTERPRISE ALERT SEARCHES - V4
+================================================
+Verified data source:
+  index=winos
+  source="WinEventLog:Application"
+  SourceName="CloudLink.Client"
+Verified hosts:
+  GPWMA00A0001, GPWMA00A0002, GRWMA00A0001, GRWMA00A0002
+
+IMPORTANT
+---------
+These searches are designed to return one or more rows only when attention is required.
+Configure the Splunk alert trigger as: Number of Results > 0.
+Event 33/34/55 business semantics remain provisional until validated against vendor documentation/raw-message patterns.
+
+
+1) CRITICAL - TOTAL CLOUDLINK VOLUME >= 40% ABOVE 5-DAY SAME-TIME BASELINE
+Recommended schedule: every 15 minutes
+Recommended throttle: 60 minutes by host
+--------------------------------------------------------------------------
+index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-5d@d latest=now
+| search host IN ("GPWMA00A0001","GPWMA00A0002","GRWMA00A0001","GRWMA00A0002")
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| where Day=Today OR SecIntoDay<=Cutoff
+| stats count as Total latest(_time) as LastSeen by host Day
+| eventstats avg(eval(if(Day<Today,Total,null()))) as FiveDayAvg by host
+| where Day=Today
+| eval PercentAbove=if(FiveDayAvg>0,round(((Total-FiveDayAvg)/FiveDayAvg)*100,1),null())
+| where PercentAbove>=40
+| eval Severity="CRITICAL", Reason="CloudLink volume >=40% above previous 5-day same-time baseline", LastSeen=strftime(LastSeen,"%Y-%m-%d %H:%M:%S")
+| table host Severity Reason Total FiveDayAvg PercentAbove LastSeen
+
+
+2) WARNING - TOTAL CLOUDLINK VOLUME >= 20% ABOVE BASELINE BUT < 40%
+Recommended schedule: every 15 minutes
+Recommended throttle: 60 minutes by host
+--------------------------------------------------------------------------
+index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-5d@d latest=now
+| search host IN ("GPWMA00A0001","GPWMA00A0002","GRWMA00A0001","GRWMA00A0002")
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| where Day=Today OR SecIntoDay<=Cutoff
+| stats count as Total latest(_time) as LastSeen by host Day
+| eventstats avg(eval(if(Day<Today,Total,null()))) as FiveDayAvg by host
+| where Day=Today
+| eval PercentAbove=if(FiveDayAvg>0,round(((Total-FiveDayAvg)/FiveDayAvg)*100,1),null())
+| where PercentAbove>=20 AND PercentAbove<40
+| eval Severity="WARNING", Reason="CloudLink volume 20-40% above previous 5-day same-time baseline", LastSeen=strftime(LastSeen,"%Y-%m-%d %H:%M:%S")
+| table host Severity Reason Total FiveDayAvg PercentAbove LastSeen
+
+
+3) CRITICAL - VERIFIED CLOUDLINK HOST HAS NO ACTIVITY FOR 10 MINUTES
+Recommended schedule: every 5 minutes
+Recommended throttle: 30 minutes by host
+--------------------------------------------------------------------------
+| makeresults count=4
+| streamstats count as n
+| eval host=case(n=1,"GPWMA00A0001",n=2,"GPWMA00A0002",n=3,"GRWMA00A0001",n=4,"GRWMA00A0002")
+| fields host
+| append [ search index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-24h latest=now
+    | search host IN ("GPWMA00A0001","GPWMA00A0002","GRWMA00A0001","GRWMA00A0002")
+    | stats latest(_time) as LastSeen by host ]
+| stats max(LastSeen) as LastSeen by host
+| eval AgeMin=if(isnull(LastSeen),999999,round((now()-LastSeen)/60,1))
+| where AgeMin>=10
+| eval Severity="CRITICAL", Reason="No CloudLink.Client activity for >=10 minutes", LastSeenText=if(isnull(LastSeen),"NO DATA IN 24H",strftime(LastSeen,"%Y-%m-%d %H:%M:%S"))
+| table host Severity Reason AgeMin LastSeenText
+
+
+4) EVENT 55 ANOMALY - >= 40% ABOVE 5-DAY SAME-TIME BASELINE
+Recommended schedule: every 15 minutes
+Recommended throttle: 60 minutes by host
+--------------------------------------------------------------------------
+index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" EventCode=55 earliest=-5d@d latest=now
+| search host IN ("GPWMA00A0001","GPWMA00A0002","GRWMA00A0001","GRWMA00A0002")
+| eval Day=relative_time(_time,"@d"), Today=relative_time(now(),"@d"), SecIntoDay=_time-Day, Cutoff=now()-Today
+| where Day=Today OR SecIntoDay<=Cutoff
+| stats count as Event55 latest(_time) as LastSeen by host Day
+| eventstats avg(eval(if(Day<Today,Event55,null()))) as FiveDayAvg by host
+| where Day=Today
+| eval PercentAbove=if(FiveDayAvg>0,round(((Event55-FiveDayAvg)/FiveDayAvg)*100,1),null())
+| where PercentAbove>=40
+| eval Severity="CRITICAL", Reason="Event 55 activity >=40% above previous 5-day same-time baseline", LastSeen=strftime(LastSeen,"%Y-%m-%d %H:%M:%S")
+| table host Severity Reason Event55 FiveDayAvg PercentAbove LastSeen
+
+
+5) CLOUDLINK ERROR-LIKE MESSAGE BURST
+Recommended schedule: every 5 minutes
+Initial threshold: 10 error-like events in 5 minutes; tune after observation
+--------------------------------------------------------------------------
+index=winos source="WinEventLog:Application" SourceName="CloudLink.Client" earliest=-5m latest=now
+| search host IN ("GPWMA00A0001","GPWMA00A0002","GRWMA00A0001","GRWMA00A0002")
+| search (Message="*invalid_signal*" OR Message="*Failed to decode signal*" OR Message="*Timeout*" OR Message="*exception*" OR Message="*failed*" OR Message="*error*")
+| stats count as ErrorLikeEvents latest(_time) as LastSeen values(EventCode) as EventCodes by host
+| where ErrorLikeEvents>=10
+| eval Severity="WARNING", Reason="Error-like CloudLink message burst", LastSeen=strftime(LastSeen,"%Y-%m-%d %H:%M:%S")
+| table host Severity Reason ErrorLikeEvents EventCodes LastSeen
+
+
+PHASE 2 - DB QUEUE ALERTS TO ADD AFTER SCHEMA CONFIRMATION
+---------------------------------------------------------
+- Queue depth above dynamic baseline
+- Oldest pending signal age threshold
+- Queue not draining for N minutes
+- Enqueue rate > drain rate for sustained period
+- Last successfully processed signal age
+- Queue anomaly correlated with CloudLink activity/freshness
